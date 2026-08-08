@@ -495,8 +495,26 @@ const COMMANDS = {
     logger.log(result.ok ? 'config-loaded' : 'error', {
       source: 'system',
       status: result.ok ? 'success' : 'error',
-      description: result.summary,
-      data: { failed: result.problems.map((p) => `${p.label}: ${p.detail}`) },
+      /*
+       * The DESCRIPTION carries the detail, not just the count.
+       *
+       * "2 of 9 checks failed: Arena AI tab, Arena workspace is open" told the
+       * user which checks failed and nothing about why. The reasons were in
+       * `data`, which the log line does not show -- so four rechecks produced
+       * four identical, uninformative lines. The exported log had the answer
+       * buried one level down.
+       */
+      description: result.problems.length
+        ? `${result.summary}\n${result.problems.map((p) => `  · ${p.label}: ${p.detail}`).join('\n')}`
+        : result.summary,
+      data: {
+        failed: result.problems.map((p) => `${p.label}: ${p.detail}`),
+        remedies: result.problems.map((p) => p.remedy).filter(Boolean),
+        surfaces: Object.fromEntries(
+          Object.entries(snapshot.surfaces ?? {}).map(([k, v]) => [k, { url: v.url, tabId: v.tabId, conversationId: v.conversationId }]),
+        ),
+        scanned: snapshot.scanned,
+      },
     });
     broadcast();
     return result;
@@ -537,6 +555,52 @@ const COMMANDS = {
     logger.log('log-exported', { source: 'user', description: `Exported ${all.length} events` });
     broadcast();
     return { ok: true, events: all.length };
+  },
+
+  /**
+   * What the extension can actually see, verbatim.
+   *
+   * Added because diagnosing "Arena tab not found" took a round trip through
+   * an exported log to discover the tab WAS found and the URL pattern was
+   * wrong. A user should be able to answer "what do you see?" without me
+   * parsing NDJSON.
+   *
+   * Lists every tab on a known AI host, whether an id could be derived, and
+   * why not. Nothing here changes state.
+   */
+  async diagnose() {
+    const all = await chrome.tabs.query({});
+    const snapshot = await snapshotEnvironment();
+    const known = ['chatgpt.com', 'chat.openai.com', 'arena.ai', 'www.arena.ai', 'chat.deepseek.com', 'deepseek.com'];
+
+    const candidates = all
+      .filter((t) => {
+        try { return known.includes(new URL(t.url || '').host.toLowerCase()); } catch { return false; }
+      })
+      .map((t) => ({ tabId: t.id, url: t.url, title: t.title, active: Boolean(t.active) }));
+
+    const resolved = Object.fromEntries(
+      Object.entries(snapshot.surfaces ?? {}).map(([k, v]) => [k, {
+        tabId: v.tabId, url: v.url, conversationId: v.conversationId,
+        usable: Boolean(v.conversationId),
+      }]),
+    );
+
+    /*
+     * `invisible` is the count of tabs the extension cannot read at all --
+     * host permissions were not granted, so `url` comes back empty. That is a
+     * completely different problem from "no matching tab", and conflating the
+     * two sent the last diagnosis down the wrong path.
+     */
+    const invisible = all.filter((t) => !t.url).length;
+
+    logger.log('config-loaded', {
+      source: 'system',
+      description: `Diagnostics: ${all.length} tabs, ${candidates.length} on AI hosts, ${invisible} unreadable`,
+      data: { candidates, resolved, invisible },
+    });
+    broadcast();
+    return { tabsTotal: all.length, invisible, candidates, resolved, expectedHosts: EXPECTED_HOSTS };
   },
 
   /** Analytics for the dashboard. Derived; never fabricated. */

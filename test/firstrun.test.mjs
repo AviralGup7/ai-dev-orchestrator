@@ -461,7 +461,13 @@ test('an Arena tab outside a workspace fails the workspace check specifically', 
    * needs a different action from a missing tab, and bind() calls the former
    * "conversation-changed", which is accurate for ChatGPT and confusing here.
    */
-  assert.match(ws.detail, /open but not inside a project workspace/);
+  /*
+   * The message now names the URL. Reporting only the conclusion ("not a
+   * workspace") made a real bug undiagnosable: the tab was correct and the
+   * URL pattern was wrong, and nothing in the message could distinguish those.
+   */
+  assert.match(ws.detail, /does not look like a project workspace/);
+  assert.match(ws.detail, /https:\/\/arena\.ai\//, 'the URL it saw must be in the message');
 
   const noTab = fresh();
   delete noTab.snapshot.surfaces.engineer;

@@ -41,10 +41,32 @@ export const SURFACE_PATTERNS = [
   },
   {
     key: 'engineer',
-    hosts: ['arena.ai'],
-    // Arena's workspace/chat id. Several shapes have been observed, so the
-    // patterns are tried in order and the first match wins.
-    id: [/\/w\/([0-9a-zA-Z_-]+)/, /\/workspace\/([0-9a-zA-Z_-]+)/, /\/chat\/([0-9a-zA-Z_-]+)/, /\/c\/([0-9a-zA-Z_-]+)/],
+    hosts: ['arena.ai', 'www.arena.ai'],
+    /*
+     * Known shapes first, then a GENERIC fallback.
+     *
+     * A user reported "Arena AI tab: not on an existing conversation" with the
+     * tab open on the right workspace. The tab was found; none of the four
+     * hard-coded patterns matched its URL, so the probe reported no id and
+     * preflight refused to start.
+     *
+     * Hard-coding another pattern would fix that one URL and fail the next
+     * redesign, so the list ends with `generic: true` -- see
+     * `conversationIdFor`. Guessing someone else's routing scheme is a losing
+     * game; deriving an id from whatever path is present is not.
+     */
+    id: [
+      /\/w\/([0-9a-zA-Z_-]+)/,
+      /\/workspace[s]?\/([0-9a-zA-Z_-]+)/,
+      /\/chat[s]?\/([0-9a-zA-Z_-]+)/,
+      /\/session[s]?\/([0-9a-zA-Z_-]+)/,
+      /\/thread[s]?\/([0-9a-zA-Z_-]+)/,
+      /\/project[s]?\/([0-9a-zA-Z_-]+)/,
+      /\/agent[s]?\/([0-9a-zA-Z_-]+)/,
+      /\/c\/([0-9a-zA-Z_-]+)/,
+      /\/a\/([0-9a-zA-Z_-]+)/,
+    ],
+    generic: true,
   },
   {
     key: 'reviewer',
@@ -62,10 +84,62 @@ function hostOf(url) {
   }
 }
 
+/**
+ * Reserved path segments that are pages, not conversations.
+ *
+ * A generic "take the last path segment" rule would happily treat
+ * `/settings` or `/login` as a conversation id, which is worse than finding
+ * nothing: the run would bind to a settings page and start pasting into it.
+ */
+const NOT_A_CONVERSATION = new Set([
+  'chat', 'chats', 'new', 'home', 'index', 'login', 'signin', 'sign-in',
+  'signup', 'settings', 'account', 'billing', 'pricing', 'docs', 'help',
+  'dashboard', 'workspace', 'workspaces', 'projects', 'about', 'app',
+]);
+
 function conversationIdFor(spec, url) {
   for (const re of spec.id) {
     const m = re.exec(url);
     if (m) return m[1];
+  }
+
+  if (!spec.generic) return null;
+
+  /*
+   * GENERIC FALLBACK: the last meaningful path segment, or a query parameter
+   * that names a conversation.
+   *
+   * This exists because hard-coded routes are a bet on someone else's URL
+   * scheme, and the bet was already lost once. The safeguards are that a
+   * reserved segment is refused (so `/settings` cannot become an id) and a
+   * bare origin still yields null (so a tab on the front page is correctly
+   * reported as "not in a conversation").
+   */
+  try {
+    const u = new URL(url);
+    for (const key of ['conversation', 'conversationId', 'chat', 'chatId', 'id', 'session', 'thread', 'workspace']) {
+      const v = u.searchParams.get(key);
+      if (v && v.length >= 2) return v;
+    }
+
+    // Hash routing: /#/chat/abc123
+    const fromHash = /[#/]([0-9a-zA-Z_-]{4,})$/.exec(u.hash);
+    if (fromHash && !NOT_A_CONVERSATION.has(fromHash[1].toLowerCase())) return fromHash[1];
+
+    const segments = u.pathname.split('/').filter(Boolean);
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      if (NOT_A_CONVERSATION.has(seg.toLowerCase())) continue;
+      /*
+       * Require some substance: 4+ characters, and at least one digit or a
+       * separator, or a length that reads like an id. A two-letter segment is
+       * far more likely to be a locale or a route than a conversation.
+       */
+      if (seg.length >= 4 && /[0-9_-]/.test(seg)) return seg;
+      if (seg.length >= 8) return seg;
+    }
+  } catch {
+    /* not a parseable URL; fall through */
   }
   return null;
 }

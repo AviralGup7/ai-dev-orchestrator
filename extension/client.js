@@ -100,6 +100,7 @@ export async function connectToBackground() {
      */
     preflight: (setup) => send('preflight', { setup }),
     analytics: () => send('analytics'),
+    diagnose: () => send('diagnose'),
     history: () => send('history'),
     replayRun: () => send('replay'),
     project: () => state.project,

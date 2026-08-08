@@ -227,6 +227,14 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
         return;
       }
       if (action === 'back') { screen = 'landing'; markDirty(); return; }
+      if (action === 'diagnose') {
+        if (typeof engine.diagnose !== 'function') {
+          throw new Error('the "diagnose" control is not connected to the background worker');
+        }
+        preflightResult = { ...preflightResult, diagnosis: await engine.diagnose() };
+        markDirty();
+        return;
+      }
       if (action === 'confirm-start') {
         screen = 'run';
         markDirty();

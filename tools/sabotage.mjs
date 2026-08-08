@@ -412,8 +412,8 @@ const CASES = [
   {
     name: 'the workspace check cannot tell "no tab" from "wrong page"',
     file: 'src/core/preflight.js',
-    from: "        : tabPresent\n          ? 'the Arena tab is open but not inside a project workspace'",
-    to: "          : tabPresent\n          ? 'no Arena tab was reported, so no workspace could be checked'",
+    from: "          ? `the Arena tab is on ${rawEngineer.url || 'an unknown URL'}, which does not look like a project workspace`",
+    to: "          ? 'no Arena tab was reported, so no workspace could be checked'",
     expect: 'outside a workspace fails the workspace check',
     test: 'test/firstrun.test.mjs',
   },
@@ -804,6 +804,31 @@ const CASES = [
     to: '      ',
     expect: 'colours by CONFIDENCE',
     test: 'test/ui.test.mjs',
+  },
+  /* ---- arena URL resolution (session 9) ---------------------------- */
+  {
+    name: 'the generic URL fallback is removed again',
+    file: 'extension/probe.js',
+    from: '  if (!spec.generic) return null;',
+    to: '  return null;\n  // eslint-disable-next-line no-unreachable',
+    expect: 'ARENA CONVERSATION URLS RESOLVE',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'the fallback accepts reserved pages as conversations',
+    file: 'extension/probe.js',
+    from: '      if (NOT_A_CONVERSATION.has(seg.toLowerCase())) continue;',
+    to: '      /* no reserved-word guard */',
+    expect: 'NON-conversation Arena page still yields no id',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'a failed tab check hides the URL it found',
+    file: 'src/core/preflight.js',
+    from: "        ? `${p.detail}${seen?.url ? ` — the tab is on ${seen.url}` : ''}`",
+    to: '        ? p.detail',
+    expect: 'SHOWS THE URL IT FOUND',
+    test: 'test/packaging.test.mjs',
   },
 ];
 

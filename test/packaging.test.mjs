@@ -646,3 +646,109 @@ test('the scanner never writes to the page', () => {
     assert.equal(scan.includes(forbidden), false, `the scanner must not call ${forbidden}`);
   }
 });
+
+/* ============================================ arena URL shapes (session 9) */
+
+test('ARENA CONVERSATION URLS RESOLVE, whatever route they use', async () => {
+  /*
+   * THE REPORTED BUG. A user had the Arena tab open on the correct workspace
+   * and preflight said "not on an existing conversation (no id)". The tab was
+   * found; none of four hard-coded URL patterns matched, so the probe reported
+   * no id and the run was refused.
+   *
+   * Hard-coding a fifth pattern would fix that URL and fail the next redesign,
+   * so the probe now falls back to deriving an id from whatever path exists.
+   */
+  const { snapshotEnvironment } = await import('../extension/probe.js');
+  const shapes = [
+    ['https://arena.ai/w/ws-7', 'ws-7'],
+    ['https://arena.ai/chats/abc123', 'abc123'],
+    ['https://arena.ai/chat/abc123', 'abc123'],
+    ['https://arena.ai/session/abc123', 'abc123'],
+    ['https://arena.ai/threads/t-99', 't-99'],
+    ['https://arena.ai/projects/my-proj', 'my-proj'],
+    ['https://arena.ai/a/1f2e3d4c-5b6a', '1f2e3d4c-5b6a'],
+    ['https://arena.ai/?conversation=abc123', 'abc123'],
+    ['https://arena.ai/#/chat/abc1234', 'abc1234'],
+    ['https://www.arena.ai/chats/zz99', 'zz99'],
+  ];
+
+  for (const [url, expected] of shapes) {
+    const snap = await snapshotEnvironment({
+      query: async () => [{ id: 22, windowId: 1, url, title: 'workspace' }],
+    });
+    assert.equal(
+      snap.surfaces.engineer?.conversationId, expected,
+      `${url} should yield "${expected}"`,
+    );
+  }
+});
+
+test('a NON-conversation Arena page still yields no id', async () => {
+  /*
+   * The generic fallback must not overreach. Treating /settings as a
+   * conversation would be worse than finding nothing: the run would bind to a
+   * settings page and start pasting into it.
+   */
+  const { snapshotEnvironment } = await import('../extension/probe.js');
+  for (const url of ['https://arena.ai/', 'https://arena.ai/chat', 'https://arena.ai/login', 'https://arena.ai/settings']) {
+    const snap = await snapshotEnvironment({
+      query: async () => [{ id: 22, windowId: 1, url, title: 'Arena' }],
+    });
+    assert.equal(snap.surfaces.engineer?.conversationId, null, `${url} must not look like a conversation`);
+  }
+});
+
+test('a failed tab check SHOWS THE URL IT FOUND', async () => {
+  /*
+   * "not on an existing conversation" is accurate and useless — it reports the
+   * conclusion, not the input, so neither the user nor I could tell whether
+   * the tab was wrong or the pattern was. A check that fails must show what it
+   * saw.
+   */
+  const { preflight } = await import('../src/core/preflight.js');
+  const { Logger } = await import('../src/core/logger.js');
+  const { MemoryLogSink } = await import('../src/core/logsink.js');
+  const { MemoryStore } = await import('../src/core/store.js');
+
+  const result = await preflight({
+    setup: { mode: 'existing', prompt: '' },
+    snapshot: {
+      surfaces: {
+        manager: { tabId: 11, url: 'https://chatgpt.com/c/abc', conversationId: 'abc', ready: true, signedIn: true },
+        engineer: { tabId: 22, url: 'https://arena.ai/some/unknown/route', conversationId: null, ready: true, signedIn: true },
+      },
+    },
+    hosts: { manager: ['chatgpt.com'], engineer: ['arena.ai'] },
+    logger: new Logger({ sink: new MemoryLogSink() }),
+    store: new MemoryStore(),
+  });
+
+  assert.equal(result.ok, false);
+  const tab = result.checks.find((c) => c.key === 'tab-engineer');
+  assert.match(tab.detail, /arena\.ai\/some\/unknown\/route/, 'the URL must appear in the failure');
+
+  const ws = result.checks.find((c) => c.key === 'workspace');
+  assert.match(ws.detail, /arena\.ai\/some\/unknown\/route/);
+  assert.match(ws.remedy, /report the URL/, 'and the user is told what would help');
+});
+
+test('the worker can report what it sees without changing anything', async () => {
+  const s = shim();
+  globalThis.chrome.tabs = {
+    query: async () => [
+      { id: 11, windowId: 1, url: 'https://chatgpt.com/c/abc', title: 'PM', active: true },
+      { id: 22, windowId: 1, url: 'https://arena.ai/unknown-route', title: 'Arena' },
+      { id: 44, windowId: 1, url: 'https://news.ycombinator.com/', title: 'HN' },
+      { id: 55, windowId: 1, url: '', title: '' },
+    ],
+  };
+  await loadWorker();
+  const d = await ask(s.registered, { kind: 'diagnose' });
+
+  assert.equal(d.tabsTotal, 4);
+  assert.equal(d.candidates.length, 2, 'only AI hosts are listed');
+  assert.equal(d.invisible, 1, 'unreadable tabs are counted separately from missing ones');
+  assert.ok(d.candidates.some((c) => c.url.includes('arena.ai')));
+  assert.ok(d.expectedHosts.engineer.includes('arena.ai'));
+});

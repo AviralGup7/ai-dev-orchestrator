@@ -376,9 +376,46 @@ export function renderPreflight(result) {
       <div class="controls">
         <button class="btn" data-action="recheck">Re-check</button>
         <button class="btn" data-action="back">Back</button>
+        ${result.ok ? '' : '<button class="btn" data-action="diagnose">What do you see?</button>'}
         <button class="btn primary" data-action="confirm-start" ${result.ok ? '' : 'disabled'}>Start run</button>
       </div>
+      ${result.diagnosis ? renderDiagnosis(result.diagnosis) : ''}
     </div>`;
+}
+
+/**
+ * What the extension can see, shown next to the failure.
+ *
+ * Pressing Re-check four times and getting the same opaque message is the
+ * experience this replaces. If a tab is open on the right page and the check
+ * still fails, the URL is right here and the pattern is the bug.
+ */
+export function renderDiagnosis(d) {
+  if (!d) return '';
+  const rows = (d.candidates || []).map((c) => `
+    <tr>
+      <td><code>${esc(String(c.tabId))}</code></td>
+      <td style="text-align:left;word-break:break-all">${esc(c.url)}</td>
+      <td>${Object.values(d.resolved || {}).some((r) => r.tabId === c.tabId && r.usable)
+    ? '<span style="color:var(--ok)">usable</span>'
+    : '<span style="color:var(--bad)">no id</span>'}</td>
+    </tr>`).join('');
+
+  return `
+    <details class="preview" open>
+      <summary>What the extension can see</summary>
+      ${d.candidates?.length
+    ? `<table class="summary"><tr><th>tab</th><th>URL</th><th></th></tr>${rows}</table>`
+    : '<div class="empty">No tabs on any recognised AI host.</div>'}
+      ${d.invisible
+    ? `<div class="warn small">${d.invisible} tab(s) could not be read at all — the extension has no host permission for them. That is different from "not found".</div>`
+    : ''}
+      <div class="muted small" style="margin-top:8px">
+        A tab marked <strong>no id</strong> was found on the right site but its URL did not yield a
+        conversation identifier. If that page IS your workspace, the URL shape is unrecognised —
+        report the URL above.
+      </div>
+    </details>`;
 }
 
 /** A preview of exactly what will be sent, before it is sent. */

@@ -93,7 +93,22 @@ export async function preflight({
     const bySurface = new Map(err.problems.map((p) => [p.surface, p]));
     for (const key of required) {
       const p = bySurface.get(key);
-      checks.push(check(`tab-${key}`, labelFor(key), !p, p?.detail || 'ok', p?.remedy || ''));
+      /*
+       * SHOW THE URL THAT WAS FOUND.
+       *
+       * A user reported "Arena AI tab: not on an existing conversation" with
+       * the tab open on the correct workspace. The message was accurate and
+       * useless -- it said what the orchestrator concluded, not what it saw,
+       * so neither of us could tell whether the tab was wrong or the URL
+       * pattern was. It was the pattern.
+       *
+       * A check that fails must show its input.
+       */
+      const seen = snapshot?.surfaces?.[key];
+      const detail = p
+        ? `${p.detail}${seen?.url ? ` — the tab is on ${seen.url}` : ''}`
+        : 'ok';
+      checks.push(check(`tab-${key}`, labelFor(key), !p, detail, p?.remedy || ''));
     }
     /*
      * Problems on surfaces we did not require are still reported. A DeepSeek
@@ -141,9 +156,11 @@ export async function preflight({
       inWorkspace
         ? `workspace ${engineer?.conversationId || rawEngineer.conversationId}`
         : tabPresent
-          ? 'the Arena tab is open but not inside a project workspace'
+          ? `the Arena tab is on ${rawEngineer.url || 'an unknown URL'}, which does not look like a project workspace`
           : 'no Arena tab was reported, so no workspace could be checked',
-      'Open the project workspace in the Arena tab.',
+      tabPresent
+        ? 'Open the project workspace in the Arena tab. If it IS open, the URL shape is unrecognised — please report the URL above.'
+        : 'Open the project workspace in the Arena tab.',
     ),
   );
 
