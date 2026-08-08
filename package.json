@@ -1,6 +1,6 @@
 {
   "name": "ai-dev-orchestrator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A browser extension that orchestrates ChatGPT, Arena and DeepSeek to autonomously improve a software project.",
   "type": "module",
   "private": true,

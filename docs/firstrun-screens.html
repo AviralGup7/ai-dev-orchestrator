@@ -1,0 +1,455 @@
+<!doctype html><html><head><meta charset="utf-8"><title>First-run screens</title><style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3;
+  --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+h1 { font-size: 14px; margin: 0; letter-spacing: .2px; }
+.muted { color: var(--muted); }
+.small { font-size: 11px; }
+.grow { flex: 1; min-width: 0; }
+
+header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+  position: sticky; top: 0; z-index: 5;
+}
+
+/* tabs */
+.tabs { display: flex; gap: 2px; padding: 6px 8px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+.tab {
+  background: none; border: 0; color: var(--muted); padding: 7px 11px; cursor: pointer;
+  font: inherit; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0;
+}
+.tab:hover { color: var(--text); background: #1f242c; }
+.tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.tab .count { font-size: 10px; background: var(--bad); color: #fff; border-radius: 8px; padding: 0 5px; margin-left: 4px; }
+
+main { padding: 10px 12px 24px; }
+section[hidden] { display: none; }
+
+/* status */
+.status { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 11px; margin-bottom: 10px; }
+.status .row { display: flex; align-items: flex-start; gap: 9px; }
+.label { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+.step { font-size: 15px; font-weight: 600; }
+.why { color: var(--muted); font-size: 12px; margin-top: 1px; overflow-wrap: anywhere; }
+.timer { font-variant-numeric: tabular-nums; color: var(--accent); font-size: 15px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); margin-top: 6px; flex: none; }
+.dot.live { background: var(--ok); animation: pulse 1.6s infinite; }
+.dot.bad { background: var(--bad); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin-top: 11px; }
+.big { font-size: 19px; font-weight: 700; }
+.big.unmeasured { color: var(--warn); }
+.next { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.next .label { margin-right: 6px; }
+.warn { margin-top: 9px; padding: 7px 9px; border-radius: 6px; background: #2d2410; color: var(--warn); font-size: 12px; }
+.err  { margin-top: 9px; padding: 7px 9px; border-radius: 6px; background: #2d1214; color: var(--bad); font-size: 12px; }
+
+/* workflow */
+.flow { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.stage { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 5px; color: var(--muted); }
+.stage .marker { width: 14px; text-align: center; }
+.stage.done { color: var(--ok); }
+.stage.active { color: var(--text); background: #1f2937; font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+.arrow { color: var(--line); padding-left: 13px; line-height: 1; font-size: 11px; }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.btn {
+  background: #21262d; color: var(--text); border: 1px solid var(--line);
+  padding: 6px 11px; border-radius: 6px; cursor: pointer; font: inherit;
+}
+.btn:hover:not(:disabled) { background: #30363d; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.primary { background: #238636; border-color: #2ea043; }
+.btn.danger:not(:disabled) { background: #4a1517; border-color: #6e2224; color: #ff9d9d; }
+.btn.small { padding: 3px 8px; font-size: 11px; }
+
+/* filters */
+.filters { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-bottom: 8px; }
+.filters input[type="search"] {
+  flex: 1; min-width: 110px; background: var(--bg); border: 1px solid var(--line);
+  color: var(--text); padding: 5px 8px; border-radius: 6px; font: inherit;
+}
+.chip {
+  background: #21262d; border: 1px solid var(--line); color: var(--muted);
+  padding: 3px 9px; border-radius: 12px; cursor: pointer; font-size: 11px;
+}
+.chip[aria-pressed="true"] { background: #1f6feb33; border-color: var(--accent); color: var(--accent); }
+
+/* log */
+.truncated { padding: 7px 9px; margin-bottom: 8px; border-radius: 6px; background: #1f2937; color: var(--accent); font-size: 11px; }
+.entry { border-bottom: 1px solid var(--line); padding: 7px 2px; }
+.entry:hover { background: #11161d; }
+.entry-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+.badge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; color: #fff; letter-spacing: .4px; }
+.type { font-weight: 500; }
+.iter { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+.dur { font-size: 10px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.desc { color: var(--muted); font-size: 12px; margin: 2px 0 0 4px; overflow-wrap: anywhere; }
+.evid { font-size: 9px; color: #444c56; margin-left: 4px; font-family: ui-monospace, monospace; }
+.entry.error .type { color: var(--bad); }
+.spin { display: inline-block; animation: spin 1.4s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg) } }
+details.data { margin: 4px 0 0 4px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 7px; overflow: auto; font-size: 11px; margin: 5px 0 0; }
+.empty { color: var(--muted); text-align: center; padding: 26px 10px; }
+
+/* errors */
+.errhead { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+.errcard { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--bad); border-radius: 6px; padding: 9px; margin-bottom: 8px; }
+.errcard.resolved { border-left-color: var(--ok); opacity: .65; }
+.errtop { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.errmeta { color: var(--muted); font-size: 11px; margin: 3px 0; }
+.errfix { color: var(--accent); font-size: 12px; margin: 6px 0; }
+.pill { font-size: 10px; padding: 1px 7px; border-radius: 9px; flex: none; }
+.pill.ok { background: #16371f; color: var(--ok); }
+.pill.bad { background: #3a1416; color: var(--bad); }
+
+/* summary */
+table.summary { width: 100%; border-collapse: collapse; }
+table.summary th { text-align: left; font-weight: 400; color: var(--muted); padding: 5px 0; font-size: 12px; }
+table.summary td { text-align: right; padding: 5px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+code { font-family: ui-monospace, monospace; font-size: 11px; }
+
+/* landing + preflight */
+.landing, .preflight { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.modes { display: grid; gap: 7px; margin: 8px 0 12px; }
+.modecard {
+  display: flex; flex-direction: column; gap: 3px; text-align: left; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px 11px;
+  color: var(--text); font: inherit;
+}
+.modecard:hover { border-color: var(--muted); }
+.modecard.chosen { border-color: var(--accent); background: #1f6feb1a; box-shadow: inset 2px 0 0 var(--accent); }
+.modename { font-weight: 600; font-size: 14px; }
+.modeblurb { color: var(--muted); font-size: 12px; }
+.modecard .pill { align-self: flex-start; margin-top: 3px; }
+.field { display: block; margin-bottom: 10px; }
+.field .label { display: block; margin-bottom: 4px; }
+.field input, .field textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 7px 9px; font: inherit; resize: vertical;
+}
+.field input:focus, .field textarea:focus { outline: none; border-color: var(--accent); }
+.fielderr { display: block; color: var(--bad); font-size: 11px; margin-top: 3px; }
+.explain { color: var(--muted); font-size: 12px; background: #11161d; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+.check { display: flex; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--line); align-items: flex-start; }
+.check .mark { width: 14px; text-align: center; }
+.check.ok .mark { color: var(--ok); }
+.check.bad .mark { color: var(--bad); }
+.preview { margin: 10px 0; }
+.preview pre { max-height: 260px; }
+
+body{max-width:460px;margin:0 auto;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.sec{padding:12px;border-top:1px solid var(--line)}
+.secl{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:8px}
+</style></head><body>
+<header><h1>AI Development Orchestrator</h1><span class="muted small">first-run screens</span></header>
+<div class="sec"><div class="secl">Landing — New Project</div>
+    <div class="landing">
+      <div class="label">Choose a workflow</div>
+      <div class="modes">
+    <button class="modecard chosen" data-mode="new"
+            aria-pressed="true">
+      <span class="modename">New Project</span>
+      <span class="modeblurb">Start something new in the Arena workspace that is already open.</span>
+      
+    </button>
+    <button class="modecard " data-mode="existing"
+            aria-pressed="false">
+      <span class="modename">Existing Project</span>
+      <span class="modeblurb">Continue the project already open in Arena, with its existing history.</span>
+      <span class="pill ok">no prompt needed</span>
+    </button>
+    <button class="modecard " data-mode="explore"
+            aria-pressed="false">
+      <span class="modename">Self Exploration</span>
+      <span class="modeblurb">No prompt needed. Arena reads the project first, then proposes what to do.</span>
+      <span class="pill ok">no prompt needed</span>
+    </button></div>
+      <label class="field">
+        <span class="label">Project name <span class="muted">(optional)</span></span>
+        <input id="projectName" type="text" value="Reporting dashboard" placeholder="Reporting dashboard">
+      </label>
+      <label class="field">
+         <span class="label">Primary project prompt</span>
+         <textarea id="prompt" rows="5" placeholder="Describe what you want built. The extension writes the rest of the prompt.">A CSV export feature for the reporting dashboard, with tests.</textarea>
+         
+       </label>
+      <div class="explain small">
+        Everything else — the response format, progress reporting, engineering report,
+        commit and test expectations, and the project state — is assembled for you and
+        prepended to every prompt.
+      </div>
+      <div class="controls">
+        <button class="btn primary" data-action="preflight" >Check environment &amp; start</button>
+      </div>
+    </div></div>
+<div class="sec"><div class="secl">Landing — Self Exploration (no prompt field)</div>
+    <div class="landing">
+      <div class="label">Choose a workflow</div>
+      <div class="modes">
+    <button class="modecard " data-mode="new"
+            aria-pressed="false">
+      <span class="modename">New Project</span>
+      <span class="modeblurb">Start something new in the Arena workspace that is already open.</span>
+      
+    </button>
+    <button class="modecard " data-mode="existing"
+            aria-pressed="false">
+      <span class="modename">Existing Project</span>
+      <span class="modeblurb">Continue the project already open in Arena, with its existing history.</span>
+      <span class="pill ok">no prompt needed</span>
+    </button>
+    <button class="modecard chosen" data-mode="explore"
+            aria-pressed="true">
+      <span class="modename">Self Exploration</span>
+      <span class="modeblurb">No prompt needed. Arena reads the project first, then proposes what to do.</span>
+      <span class="pill ok">no prompt needed</span>
+    </button></div>
+      <label class="field">
+        <span class="label">Project name <span class="muted">(optional)</span></span>
+        <input id="projectName" type="text" value="" placeholder="Reporting dashboard">
+      </label>
+      <div class="explain">Arena will read the project first and report what it finds — purpose,
+         architecture, tests, debt and risks — then propose a prioritised roadmap.
+         <strong>You do not write a prompt.</strong></div>
+      <div class="explain small">
+        Everything else — the response format, progress reporting, engineering report,
+        commit and test expectations, and the project state — is assembled for you and
+        prepended to every prompt.
+      </div>
+      <div class="controls">
+        <button class="btn primary" data-action="preflight" >Check environment &amp; start</button>
+      </div>
+    </div></div>
+<div class="sec"><div class="secl">Landing — validation</div>
+    <div class="landing">
+      <div class="label">Choose a workflow</div>
+      <div class="modes">
+    <button class="modecard chosen" data-mode="new"
+            aria-pressed="true">
+      <span class="modename">New Project</span>
+      <span class="modeblurb">Start something new in the Arena workspace that is already open.</span>
+      
+    </button>
+    <button class="modecard " data-mode="existing"
+            aria-pressed="false">
+      <span class="modename">Existing Project</span>
+      <span class="modeblurb">Continue the project already open in Arena, with its existing history.</span>
+      <span class="pill ok">no prompt needed</span>
+    </button>
+    <button class="modecard " data-mode="explore"
+            aria-pressed="false">
+      <span class="modename">Self Exploration</span>
+      <span class="modeblurb">No prompt needed. Arena reads the project first, then proposes what to do.</span>
+      <span class="pill ok">no prompt needed</span>
+    </button></div>
+      <label class="field">
+        <span class="label">Project name <span class="muted">(optional)</span></span>
+        <input id="projectName" type="text" value="" placeholder="Reporting dashboard">
+      </label>
+      <label class="field">
+         <span class="label">Primary project prompt</span>
+         <textarea id="prompt" rows="5" placeholder="Describe what you want built. The extension writes the rest of the prompt.">make an app</textarea>
+         <span class="fielderr">That is very short. A sentence or two about what this project is will keep the run on target.</span>
+       </label>
+      <div class="explain small">
+        Everything else — the response format, progress reporting, engineering report,
+        commit and test expectations, and the project state — is assembled for you and
+        prepended to every prompt.
+      </div>
+      <div class="controls">
+        <button class="btn primary" data-action="preflight" >Check environment &amp; start</button>
+      </div>
+    </div></div>
+<div class="sec"><div class="secl">Preflight — all good</div>
+    <div class="preflight">
+      <div class="label">Environment check</div>
+      
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>Project details are complete</div>
+        
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>ChatGPT tab</div>
+        <div class="muted small">tab 11 · chatgpt.com · demo-manager</div>
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>Arena AI tab</div>
+        <div class="muted small">tab 22 · arena.ai · demo-workspace</div>
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>DeepSeek (optional)</div>
+        <div class="muted small">not enabled — strategy review will be skipped</div>
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>Arena workspace is open</div>
+        <div class="muted small">workspace demo-workspace</div>
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>Durable log storage</div>
+        <div class="muted small">accepting writes</div>
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>Logger is running</div>
+        <div class="muted small">writing (session 202608081039-zml)</div>
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>State storage initialised</div>
+        <div class="muted small">initialised — no previous project stored</div>
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>Mode &quot;Self Exploration&quot; assumes existing work</div>
+        <div class="muted small">Arena will read the repository before proposing anything. If the workspace is empty, the exploration report will say so.</div>
+        
+      </div>
+    </div>
+      <div class="explain small">All checks passed. Nothing was created, opened or changed.</div>
+      <div class="controls">
+        <button class="btn" data-action="recheck">Re-check</button>
+        <button class="btn" data-action="back">Back</button>
+        <button class="btn primary" data-action="confirm-start" >Start run</button>
+      </div>
+    </div>
+    <details class="preview">
+      <summary>Preview the prompt that will be sent (1,603 characters)</summary>
+      <pre>## ORCHESTRATION PROTOCOL v1 — read this first
+
+You are the ENGINEER in an orchestrated workflow. A separate system decides
+what to work on and evaluates the result. Your job is to execute the objective
+below and report what actually happened.
+
+### Rules
+
+1. Work only on the objective given. If you believe something else is more
+   important, put it in `suggestedNextTask` — do not do it instead.
+2. Run the build and the test suite. Report the real numbers, including
+   failures. A report of success that the evidence does not support is the
+   single most damaging thing you can produce here, because the scores are
+   computed from these numbers.
+3. If you could not do something, say so in `taskStatus` and `knownIssues`.
+   &quot;blocked&quot; and &quot;partial&quot; are useful answers. An invented success is not.
+4. Commit your work. Report the SHA.
+5. Do not ask questions and wait — there is no human in this loop to answer.
+   If a decision is genuinely required, set `taskStatus: &quot;blocked&quot;` and
+   explain what you need in `knownIssues`.
+
+### Required response format
+
+Answer normally if you like, then end your message with EXACTLY this block:
+
+```ORCHESTRATOR-REPORT
+{
+  taskStatus: &quot;complete&quot; | &quot;partial&quot; | &quot;blocked&quot; | &quot;failed&quot;
+  summary: string
+  filesModified: string[]
+  build: { ran: boolean, ok: boolean, command: string, output: string }
+  tests: { ran: boolean, passed: number, failed: number, skipped: number, command: string }
+  lint: { ran: boolean, errors: number, warnings: number }   (optional)
+  coverage: { ran: boolean, linesPct: number, branchesPct: number }   (optional)
+  commit: { m\n…</pre>
+    </details></div>
+<div class="sec"><div class="secl">Preflight — Arena tab missing</div>
+    <div class="preflight">
+      <div class="label">Environment check</div>
+      
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>Project details are complete</div>
+        
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>ChatGPT tab</div>
+        <div class="muted small">tab 11 · chatgpt.com · demo-manager</div>
+        
+      </div>
+    </div>
+    <div class="check bad">
+      <span class="mark">✗</span>
+      <div class="grow">
+        <div>Arena AI tab</div>
+        <div class="muted small">no pre-opened tab was reported</div>
+        <div class="errfix small">→ reopen the tab and rebind, or stop the run</div>
+      </div>
+    </div>
+    <div class="check bad">
+      <span class="mark">✗</span>
+      <div class="grow">
+        <div>Arena workspace is open</div>
+        <div class="muted small">no Arena tab was reported, so no workspace could be checked</div>
+        <div class="errfix small">→ Open the project workspace in the Arena tab.</div>
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>Logger is running</div>
+        <div class="muted small">writing (session demo)</div>
+        
+      </div>
+    </div>
+    <div class="check ok">
+      <span class="mark">✓</span>
+      <div class="grow">
+        <div>State storage initialised</div>
+        <div class="muted small">initialised — no previous project stored</div>
+        
+      </div>
+    </div>
+      <div class="warn">The orchestrator will not open tabs, start chats or sign in to fix these. Put the environment right, then re-check.</div>
+      <div class="controls">
+        <button class="btn" data-action="recheck">Re-check</button>
+        <button class="btn" data-action="back">Back</button>
+        <button class="btn primary" data-action="confirm-start" disabled>Start run</button>
+      </div>
+    </div></div>
+</body></html>

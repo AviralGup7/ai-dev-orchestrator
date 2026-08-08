@@ -45,7 +45,25 @@ writeFileSync('/tmp/run.mjs', code);
 await import('/tmp/run.mjs');
 
 const engine = globalThis.__engine, logger = globalThis.__logger, orch = globalThis.__orch;
-await engine.start();
+
+/*
+ * Drive the real first-run flow: choose a mode, run preflight, then start.
+ * Calling engine.start() directly would skip the two screens the user
+ * actually meets first, which is exactly the part most likely to break.
+ */
+const setup = { mode: 'explore', projectName: 'Reporting service', prompt: '' };
+const pre = await engine.preflight(setup);
+assert.equal(pre.ok, true, `preflight failed: ${pre.summary}`);
+assert.ok(pre.prompt && pre.prompt.includes('EXPLORATION ONLY'), 'explore mode must inject the exploration brief');
+assert.ok(pre.prompt.includes('ORCHESTRATION PROTOCOL'), 'the protocol must be prepended for the user');
+assert.equal(/## OBJECTIVE/.test(pre.prompt), false, 'explore mode must not add an empty objective heading');
+
+await engine.start(setup);
+
+assert.equal(orch.memory.mode, 'explore', 'the chosen mode is persisted');
+assert.equal(orch.memory.baselineDone, true, 'the exploration baseline completed');
+assert.equal(orch.memory.history[0].baseline, true, 'iteration 1 is marked as the baseline');
+assert.match(orch.memory.history[0].objective.text, /Explore and understand/);
 
 const ev = logger.live;
 const types = new Set(ev.map((e) => e.type));
@@ -81,4 +99,4 @@ for (const t of ['log', 'workflow', 'errors', 'summary']) {
 }
 globalThis.__panel.destroy();
 
-console.log(`ok: demo ran ${orch.memory.iteration} iterations, ${ev.length} events, ${types.size} distinct types, all 4 tabs rendered`);
+console.log(`ok: landing -> preflight -> explore run; ${orch.memory.iteration} iterations, ${ev.length} events, ${types.size} distinct types, all 4 tabs rendered`);

@@ -9,12 +9,12 @@ Not a coding assistant. Not a prompt-copier. The distinguishing claim is
 **judgement**: it decides what to work on next, notices when it is going in
 circles, and stops when it is actually done.
 
-> **Status: engine + environment contract + full observability UI.** The
-> orchestration engine, the pre-initiated environment contract, the logging
-> subsystem and the side-panel UI are complete and tested. The AI adapters are
-> the remaining milestone. See [`docs/SPEC.md`](docs/SPEC.md),
-> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) and
-> [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md).
+> **Status: engine + environment contract + observability UI + first-run
+> workflow.** Everything except the three AI adapters, which are the remaining
+> milestone. See [`docs/SPEC.md`](docs/SPEC.md),
+> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md),
+> [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) and
+> [`docs/FIRSTRUN.md`](docs/FIRSTRUN.md).
 >
 > **Try it without installing:** `npm run demo` writes `demo.html` — the real
 > engine, logger and UI driven by fake adapters on a sped-up clock. Open it and
@@ -64,7 +64,16 @@ IndexedDB record that never discards, and a bounded live view that says how
 many events it is not showing. You can always see what it is doing, why, what
 happened before, what comes next, and stop it.
 
-**4 · The environment is inherited, never created.**
+**4 · You write a description; the extension writes the prompt.**
+
+Three workflow modes — New Project, Existing Project, and Self Exploration
+(which needs no prompt at all). Whichever you pick, the extension prepends an
+orchestration protocol defining the response format, the required engineering
+report, and commit/test/logging expectations, then appends the project state
+assembled from memory. Arena's reply is parsed into typed evidence, and any
+field that would let it choose direction is dropped before the loop sees it.
+
+**5 · The environment is inherited, never created.**
 
 The tabs are already open, the conversations are already chosen, and the user
 is already signed in. The orchestrator switches focus between those tabs, types
@@ -99,6 +108,10 @@ src/core/        the engine — pure, no browser, runs in Node
   status.js        the five questions, derived from memory + log
   controls.js      start/pause/skip/retry, and what skip costs
   bridge.js        engine events -> Activity Log entries
+  modes.js         the three first-run workflows
+  protocol.js      the orchestration protocol injected before every prompt
+  report.js        parses Arena's report into typed evidence
+  preflight.js     the pre-start checklist
 src/adapters/    per-AI request/response shaping (next milestone)
 src/transports/  the only layer that knows about tabs
 extension/       manifest, service worker, popup, side panel, renderers
@@ -108,15 +121,17 @@ extension/       manifest, service worker, popup, side panel, renderers
   idbsink.js       IndexedDB log store + chrome.storage memory store
 docs/SPEC.md          the specification
 docs/ENVIRONMENT.md   the pre-initiated environment contract
+docs/OBSERVABILITY.md the logging subsystem and the UI
+docs/FIRSTRUN.md      the three workflow modes and the injected protocol
 ```
 
 ## Commands
 
 ```
-npm test            149 tests, no browser required
+npm test            200 tests, no browser required
 npm run purity      fails if the engine grows a browser dependency
 npm run env-safety  fails if anything can open/close/navigate a tab
-npm run sabotage    breaks the code 34 ways; every break must fail a named test
+npm run sabotage    breaks the code 50 ways; every break must fail a named test
 npm run demo        builds demo.html — the real UI, fake AIs, sped-up clock
 npm run smoke       runs the demo headlessly and checks the log is coherent
 npm run check       purity + env-safety + tests + demo build

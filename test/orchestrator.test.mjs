@@ -15,8 +15,17 @@ const { makeEvidence } = await import('../src/core/types.js');
 const { fakeManager, fakeEngineer, fakeReviewer, flatScores, passing } =
   await import('./helpers/fakes.mjs');
 
-/** A run wired for one purpose, with sensible defaults. */
-function build({ objectives, evaluations, results, responses, config } = {}) {
+/**
+ * A run wired for one purpose, with sensible defaults.
+ *
+ * `baselineDone` defaults to TRUE here, and that is a deliberate choice about
+ * what this file tests. Iteration 1 of every workflow mode is a fixed baseline
+ * that does not consult the manager -- covered in test/firstrun.test.mjs.
+ * These tests are about the steady-state loop, so they start past it.
+ * Defaulting the other way would make every test in this file secretly
+ * exercise the baseline and then disagree with its own name.
+ */
+function build({ objectives, evaluations, results, responses, config, baselineDone = true } = {}) {
   const store = new MemoryStore();
   const events = [];
   const o = new Orchestrator({
@@ -27,6 +36,12 @@ function build({ objectives, evaluations, results, responses, config } = {}) {
     config: { maxIterations: 10, target: 90, ...config },
     onEvent: (e) => events.push(e),
   });
+  const load = o.load.bind(o);
+  o.load = async (...args) => {
+    const m = await load(...args);
+    m.baselineDone = baselineDone;
+    return m;
+  };
   return { o, store, events };
 }
 
@@ -202,6 +217,7 @@ test('the reviewer runs every Nth iteration, not every one', async () => {
     config: { maxIterations: 6, reviewEvery: 3, target: 200 },
   });
   await o.load('p');
+  o.memory.baselineDone = true; // review cadence is a steady-state behaviour
   await o.run();
   assert.equal(reviewer.calls(), 2, 'iterations 3 and 6');
 });
@@ -267,6 +283,7 @@ test('a failed iteration preserves state for inspection', async () => {
     store,
   });
   await o.load('p');
+  o.memory.baselineDone = true; // steady state: the baseline is covered elsewhere
   await assert.rejects(() => o.iterate(), /arena tab closed/);
 
   const saved = await store.load();
@@ -358,6 +375,7 @@ test('the manager receives the context it needs to plan', async () => {
     store,
   });
   await o.load('the scope');
+  o.memory.baselineDone = true; // plan() is only consulted after the baseline
   await o.iterate();
 
   for (const key of ['scope', 'iteration', 'history', 'openIssues', 'failedAttempts', 'lastScores', 'flags']) {

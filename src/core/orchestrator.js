@@ -33,6 +33,42 @@ import { detect } from './detect.js';
 import { shouldStop, DEFAULTS } from './stop.js';
 import { EnvironmentError, describe as describeDrift } from './environment.js';
 import { recordSkip } from './controls.js';
+import { getMode } from './modes.js';
+
+/**
+ * The fixed objective for iteration 1, by mode.
+ *
+ * Written here rather than asked of the manager: the answer is known, and
+ * spending a ChatGPT round trip to be told "explore the project" in explore
+ * mode is pure latency. It also removes the possibility of the manager
+ * deciding to skip the baseline, which it would occasionally do when the
+ * conversation already looked productive.
+ */
+function baselineObjective(memory) {
+  const kind = getMode(memory.mode).baseline;
+  if (kind === 'explore') {
+    return {
+      text: 'Explore and understand the existing project, then produce an understanding report, a prioritised roadmap and evidence-based initial scores',
+      constraints: ['do not modify any code', 'do not commit'],
+      acceptance: ['a comprehensive understanding report', 'a prioritised roadmap', 'initial scores with a stated basis for each'],
+      baseline: true,
+    };
+  }
+  if (kind === 'synchronise') {
+    return {
+      text: 'Synchronise with the current state of the repository: report the real build and test results as a baseline, then continue the stated objective',
+      constraints: ['do not re-scaffold', 'do not start over'],
+      acceptance: ['current branch and commit reported', 'build and test output reported as they actually are'],
+      baseline: true,
+    };
+  }
+  return {
+    text: 'Initialise the project: establish engineering standards, set up the test suite, make the initial commit, and begin implementation',
+    constraints: ['do not delete anything already in the workspace'],
+    acceptance: ['standards written into the repository', 'a test that can genuinely fail', 'an initial commit'],
+    baseline: true,
+  };
+}
 
 export class Orchestrator {
   /**
@@ -68,9 +104,19 @@ export class Orchestrator {
     this.environment = environment || null;
   }
 
-  async load(scope = '') {
-    this.memory = (await this.store.load()) || emptyMemory(scope);
+  async load(scope = '', mode = 'new') {
+    this.memory = (await this.store.load()) || emptyMemory(scope, mode);
     if (scope && !this.memory.scope) this.memory.scope = scope;
+    /*
+     * An older stored memory has no `mode`. Defaulting it to 'new' would be
+     * wrong in the one case that matters -- a resumed run on an existing
+     * project would start re-scaffolding -- so a memory with history is
+     * treated as 'existing', which is what it factually is.
+     */
+    if (!this.memory.mode) this.memory.mode = this.memory.history?.length ? 'existing' : mode;
+    if (this.memory.baselineDone === undefined) {
+      this.memory.baselineDone = (this.memory.history?.length ?? 0) > 0;
+    }
     return this.memory;
   }
 
@@ -431,17 +477,34 @@ export class Orchestrator {
     this.memory.phase = 'plan';
     await this.save();
 
-    const objective = await this.manager.plan({
-      scope: this.memory.scope,
-      iteration: this.memory.iteration + 1,
-      history: this.recentHistory(),
-      openIssues: this.memory.openIssues,
-      failedAttempts: this.memory.failedAttempts,
-      lastScores: this.lastScores(),
-      flags: this.memory.flags,
-    });
+    /*
+     * THE BASELINE ITERATION IS NOT PLANNED BY THE MANAGER.
+     *
+     * Iteration 1 of every mode has a fixed job -- establish standards,
+     * synchronise with reality, or explore -- and asking ChatGPT to invent an
+     * objective for it would waste a round trip on a question with a known
+     * answer, and would let the manager decide to skip the baseline entirely.
+     *
+     * `baselineDone` is checked rather than `iteration === 0` because a
+     * baseline can fail and be retried; the flag only flips when it actually
+     * produced its report.
+     */
+    const objective = this.memory.baselineDone
+      ? await this.manager.plan({
+        scope: this.memory.scope,
+        mode: this.memory.mode,
+        baseline: this.memory.baseline,
+        iteration: this.memory.iteration + 1,
+        history: this.recentHistory(),
+        openIssues: this.memory.openIssues,
+        failedAttempts: this.memory.failedAttempts,
+        lastScores: this.lastScores(),
+        flags: this.memory.flags,
+      })
+      : baselineObjective(this.memory);
 
     if (!objective?.text) throw new Error('manager returned no objective');
+    record.baseline = !this.memory.baselineDone;
 
     this.memory.objective = objective;
     record.objective = objective;
@@ -517,6 +580,40 @@ export class Orchestrator {
     }
 
     await this.save();
+    /*
+     * THE BASELINE IS ONLY DONE WHEN IT ACTUALLY PRODUCED SOMETHING.
+     *
+     * Flipped here rather than in phasePlan, and only on a record that carries
+     * a summary. A baseline whose execute phase was skipped, or which returned
+     * an unparseable report, must run again -- otherwise the run proceeds to
+     * "normal improvement" on top of an understanding it never acquired, which
+     * is the exact failure `explore` mode exists to prevent.
+     */
+    if (!this.memory.baselineDone && record.baseline && record.summary) {
+      this.memory.baselineDone = true;
+      this.memory.baseline = {
+        at: Date.now(),
+        iteration: record.n,
+        mode: this.memory.mode,
+        summary: record.summary,
+        report: record.report ?? null,
+        roadmap: record.report?.roadmap ?? null,
+      };
+      /*
+       * In explore mode the scope was a placeholder. Replacing it with the
+       * engineer's own one-line summary is the only point at which the
+       * "never edited" rule on `scope` is relaxed -- and it is relaxed exactly
+       * once, from a placeholder that says so, which is why the original text
+       * is kept alongside rather than overwritten silently.
+       */
+      if (this.memory.mode === 'explore' && /pending exploration/.test(this.memory.scope || '')) {
+        this.memory.scopePlaceholder = this.memory.scope;
+        this.memory.scope = truncateScope(record.summary);
+        this.emit('scope-established', { scope: this.memory.scope, iteration: record.n });
+      }
+      this.emit('baseline-complete', { mode: this.memory.mode, iteration: record.n });
+    }
+
     this.emit('evaluated', { overall: o.score, confidence: o.confidence, iteration: record.n });
   }
 
@@ -695,3 +792,9 @@ export class Orchestrator {
 }
 
 export { PHASES };
+
+/** First sentence of the exploration summary, bounded. */
+function truncateScope(summary) {
+  const first = String(summary).split(/(?<=[.!?])\s/)[0] || String(summary);
+  return first.length > 200 ? `${first.slice(0, 199)}…` : first;
+}

@@ -158,9 +158,29 @@ export const STOP_REASONS = /** @type {const} */ ([
  * object on purpose: it has to survive a browser restart, and the cheapest
  * durable thing is a value with no behaviour attached.
  */
-export function emptyMemory(scope = '') {
+export function emptyMemory(scope = '', mode = 'new') {
   return {
     scope,                  // the user's original description. Never edited.
+    /*
+     * Which of the three landing-screen workflows started this run.
+     *
+     * Persisted rather than held in the UI because it changes how prompts are
+     * written forty iterations later -- "as established in the exploration
+     * report" is a lie if the run began as a new project -- and an MV3 service
+     * worker is evicted constantly. A mode living only in the popup would be
+     * lost on the first eviction and the loop would silently change dialect.
+     */
+    mode,                   // 'new' | 'existing' | 'explore'
+    /*
+     * Has the baseline iteration completed?
+     *
+     * The first iteration of every mode is special: it establishes standards,
+     * synchronises with reality, or explores. Normal improvement work only
+     * begins afterwards, and the flag is what tells `plan` which it is doing.
+     */
+    baselineDone: false,
+    /** The exploration report, when there is one. Referenced by later prompts. */
+    baseline: null,
     phase: 'plan',
     iteration: 0,
     status: 'idle',

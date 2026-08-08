@@ -252,3 +252,109 @@ export function renderSummary(s) {
     ${caveats.length ? `<div class="warn">${caveats.map(esc).join('<br>')}</div>` : ''}
     <div class="controls"><button class="btn" data-action="export">Export full log</button></div>`;
 }
+
+/* ========================================================================== *
+ * LANDING SCREEN
+ * ========================================================================== */
+
+/**
+ * The three workflow options.
+ *
+ * Rendered as large radio-style cards rather than a dropdown: the choice
+ * changes what the extension does for the next several hours, and a
+ * dropdown's default value gets accepted without being read. A card the user
+ * has to click is a decision they made.
+ */
+export function renderLanding({ modes, mode, projectName = '', prompt = '', problems = [] }) {
+  const byField = new Map(problems.map((p) => [p.field, p.message]));
+  const spec = modes.find((m) => m.key === mode);
+
+  const cards = modes.map((m) => `
+    <button class="modecard ${m.key === mode ? 'chosen' : ''}" data-mode="${esc(m.key)}"
+            aria-pressed="${m.key === mode}">
+      <span class="modename">${esc(m.label)}</span>
+      <span class="modeblurb">${esc(m.blurb)}</span>
+      ${m.needsPrompt ? '' : '<span class="pill ok">no prompt needed</span>'}
+    </button>`).join('');
+
+  /*
+   * The prompt field is not merely hidden in explore mode -- it is replaced
+   * with an explanation. A field that silently disappears reads as a bug; a
+   * sentence saying why there is nothing to fill in reads as a design.
+   */
+  const promptSection = !spec ? '' : spec.needsPrompt
+    ? `<label class="field">
+         <span class="label">Primary project prompt</span>
+         <textarea id="prompt" rows="5" placeholder="Describe what you want built. The extension writes the rest of the prompt.">${esc(prompt)}</textarea>
+         ${byField.has('prompt') ? `<span class="fielderr">${esc(byField.get('prompt'))}</span>` : ''}
+       </label>`
+    : spec.key === 'explore'
+      ? `<div class="explain">Arena will read the project first and report what it finds — purpose,
+         architecture, tests, debt and risks — then propose a prioritised roadmap.
+         <strong>You do not write a prompt.</strong></div>`
+      : `<label class="field">
+           <span class="label">Objective update <span class="muted">(optional)</span></span>
+           <textarea id="prompt" rows="3" placeholder="Leave blank to continue the work already in progress.">${esc(prompt)}</textarea>
+         </label>`;
+
+  return `
+    <div class="landing">
+      <div class="label">Choose a workflow</div>
+      <div class="modes">${cards}</div>
+      <label class="field">
+        <span class="label">Project name <span class="muted">(optional)</span></span>
+        <input id="projectName" type="text" value="${esc(projectName)}" placeholder="Reporting dashboard">
+      </label>
+      ${promptSection}
+      <div class="explain small">
+        Everything else — the response format, progress reporting, engineering report,
+        commit and test expectations, and the project state — is assembled for you and
+        prepended to every prompt.
+      </div>
+      <div class="controls">
+        <button class="btn primary" data-action="preflight" ${spec ? '' : 'disabled'}>Check environment &amp; start</button>
+      </div>
+    </div>`;
+}
+
+/**
+ * The preflight checklist.
+ *
+ * Every row shows its outcome AND its remedy, because a failed check with no
+ * remedy just tells the user they cannot proceed. The Start button is disabled
+ * until everything passes -- the orchestrator will not create a tab to fix it.
+ */
+export function renderPreflight(result) {
+  const rows = result.checks.map((c) => `
+    <div class="check ${c.ok ? 'ok' : 'bad'}">
+      <span class="mark">${c.ok ? '✓' : '✗'}</span>
+      <div class="grow">
+        <div>${esc(c.label)}</div>
+        ${c.detail ? `<div class="muted small">${esc(c.detail)}</div>` : ''}
+        ${!c.ok && c.remedy ? `<div class="errfix small">→ ${esc(c.remedy)}</div>` : ''}
+      </div>
+    </div>`).join('');
+
+  return `
+    <div class="preflight">
+      <div class="label">Environment check</div>
+      ${rows}
+      ${result.ok
+        ? '<div class="explain small">All checks passed. Nothing was created, opened or changed.</div>'
+        : '<div class="warn">The orchestrator will not open tabs, start chats or sign in to fix these. Put the environment right, then re-check.</div>'}
+      <div class="controls">
+        <button class="btn" data-action="recheck">Re-check</button>
+        <button class="btn" data-action="back">Back</button>
+        <button class="btn primary" data-action="confirm-start" ${result.ok ? '' : 'disabled'}>Start run</button>
+      </div>
+    </div>`;
+}
+
+/** A preview of exactly what will be sent, before it is sent. */
+export function renderPromptPreview(text) {
+  return `
+    <details class="preview">
+      <summary>Preview the prompt that will be sent (${text.length.toLocaleString()} characters)</summary>
+      <pre>${esc(text)}</pre>
+    </details>`;
+}

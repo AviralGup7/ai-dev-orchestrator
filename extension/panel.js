@@ -20,7 +20,8 @@
  * repaints at a fixed rate; the "Elapsed" clock needs that timer anyway.
  */
 
-import { renderStatus, renderWorkflow, renderLog, renderControls, renderErrors, renderSummary, esc } from './ui.js';
+import { renderStatus, renderWorkflow, renderLog, renderControls, renderErrors, renderSummary, renderLanding, renderPreflight, renderPromptPreview, esc } from './ui.js';
+import { MODES } from '../src/core/modes.js';
 import { liveStatus, workflowState, errorCenter } from '../src/core/status.js';
 import { availableControls } from '../src/core/controls.js';
 import { summarise } from '../src/core/logger.js';
@@ -48,6 +49,20 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
   let tab = 'log';                       // Activity Log first: it is the source of truth
   let filters = { channels: null, statuses: null, search: '' };
   let dirty = true;
+
+  /*
+   * SCREEN vs TAB. The landing screen is not a fifth tab.
+   *
+   * Before a project exists there is nothing for the Activity Log to show, and
+   * offering Workflow/Errors/Summary tabs over an empty run is four ways to
+   * look at nothing. The tabs appear once a run exists -- which is also the
+   * moment the Activity Log becomes the source of truth the spec calls for.
+   */
+  let screen = engine.memory()?.scope ? 'run' : 'landing';
+  let setup = { mode: null, projectName: '', prompt: '' };
+  let setupProblems = [];
+  let preflightResult = null;
+  let promptPreview = null;
 
   root.innerHTML = `
     <header>
@@ -78,7 +93,30 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
 
   /* ------------------------------------------------------------ events -- */
 
+  /** Read the landing form back out of the DOM before re-rendering it. */
+  function captureForm() {
+    const name = root.querySelector('#projectName');
+    const prompt = root.querySelector('#prompt');
+    if (name) setup.projectName = name.value;
+    // `prompt` is absent in explore mode; leaving the previous value alone
+    // means switching modes back and forth does not silently discard typing.
+    if (prompt) setup.prompt = prompt.value;
+  }
+
   root.addEventListener('click', async (ev) => {
+    const modeBtn = ev.target.closest('[data-mode]');
+    if (modeBtn) {
+      captureForm();
+      setup.mode = modeBtn.dataset.mode;
+      setupProblems = [];
+      engine.logger().log('settings-changed', {
+        description: `Workflow mode set to "${modeBtn.dataset.mode}"`,
+        data: { mode: modeBtn.dataset.mode },
+      });
+      markDirty();
+      return;
+    }
+
     const tabBtn = ev.target.closest('[data-tab]');
     if (tabBtn) {
       tab = tabBtn.dataset.tab;
@@ -117,6 +155,26 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
     if (btn && !btn.disabled) {
       const action = btn.dataset.action;
       engine.logger().log('button-clicked', { description: `Pressed ${action}`, data: { action } });
+
+      if (action === 'preflight' || action === 'recheck') {
+        captureForm();
+        const result = await engine.preflight(setup);
+        setupProblems = result.setupProblems || [];
+        preflightResult = result.ok === undefined ? result : result;
+        promptPreview = result.prompt || null;
+        screen = 'preflight';
+        markDirty();
+        return;
+      }
+      if (action === 'back') { screen = 'landing'; markDirty(); return; }
+      if (action === 'confirm-start') {
+        screen = 'run';
+        markDirty();
+        await engine.start(setup);
+        markDirty();
+        return;
+      }
+
       await engine[action]?.();
       markDirty();
     }
@@ -146,6 +204,7 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
   /* ------------------------------------------------------------ render -- */
 
   function paint() {
+    if (screen !== 'run') return paintSetup();
     const memory = engine.memory();
     const logger = engine.logger();
     const config = engine.config();
@@ -185,6 +244,26 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
     }
 
     $('#sess').textContent = `session ${logger.sessionId}`;
+    root.querySelector('.tabs').hidden = false;
+    dirty = false;
+  }
+
+  /** The pre-run screens. Tabs are hidden: there is nothing to tab through. */
+  function paintSetup() {
+    root.querySelector('.tabs').hidden = true;
+    $('#controls').innerHTML = '';
+    for (const t of TABS) root.querySelector(`#pane-${t.key}`).hidden = true;
+    $('#pane-log').hidden = false;
+
+    if (screen === 'landing') {
+      $('#status').innerHTML = '';
+      $('#log').innerHTML = renderLanding({ modes: MODES, ...setup, problems: setupProblems });
+    } else {
+      $('#status').innerHTML = '';
+      $('#log').innerHTML =
+        renderPreflight(preflightResult) + (promptPreview ? renderPromptPreview(promptPreview) : '');
+    }
+    $('#sess').textContent = `session ${engine.logger().sessionId}`;
     dirty = false;
   }
 

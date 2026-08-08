@@ -37,9 +37,13 @@ const MODULES = [
   'src/core/scoring.js',
   'src/core/detect.js',
   'src/core/controls.js',
+  'src/core/modes.js',
+  'src/core/protocol.js',
+  'src/core/report.js',
   'src/core/stop.js',
   'src/core/store.js',
   'src/core/environment.js',
+  'src/core/preflight.js',
   'src/core/logsink.js',
   'src/core/logger.js',
   'src/core/status.js',
@@ -117,7 +121,8 @@ const manager = {
     const n = ctx.iteration;
     const close = await drive('chatgpt', 'ChatGPT', 900, n);
     close(1400);
-    const text = OBJECTIVES[Math.min(n - 1, OBJECTIVES.length - 1)];
+    /* Iteration 1 is the fixed baseline, so the manager is first asked at 2. */
+    const text = OBJECTIVES[Math.min(n - 2, OBJECTIVES.length - 1)] || OBJECTIVES[0];
     logger.log('planning-complete', { source: 'chatgpt', description: 'Objective: ' + text, iteration: n });
     return { text, constraints: ['do not change the public API'] };
   },
@@ -198,19 +203,54 @@ const orch = new Orchestrator({
 });
 
 let running = false;
+let chosen = null;
+
+/* A pre-opened environment, exactly as the contract assumes. */
+const SNAPSHOT = { surfaces: {
+  manager:  { tabId: 11, url: 'https://chatgpt.com/c/demo-manager',   conversationId: 'demo-manager', ready: true, signedIn: true, title: 'Orchestrator PM' },
+  engineer: { tabId: 22, url: 'https://arena.ai/w/demo-workspace',    conversationId: 'demo-workspace', ready: true, signedIn: true, title: 'reporting-service' },
+  reviewer: { tabId: 33, url: 'https://chat.deepseek.com/a/chat/s/d9', conversationId: 'd9', ready: true, signedIn: true, title: 'strategy' },
+} };
+const HOSTS = { manager: ['chatgpt.com'], engineer: ['arena.ai'], reviewer: ['chat.deepseek.com'] };
+
 const engine = {
   memory: () => orch.memory,
   logger: () => logger,
   config: () => orch.config,
   startedAt: () => startedAt,
-  async start() {
+
+  async preflight(setup) {
+    logger.log('config-loaded', { source: 'system', description: 'Running pre-start validation' });
+    const setupCheck = validateSetup(setup);
+    const result = await preflight({ setup, snapshot: SNAPSHOT, hosts: HOSTS, logger, store });
+    result.setupProblems = setupCheck.problems;
+    if (result.ok) {
+      chosen = setup;
+      result.prompt = composeFirstPrompt({
+        mode: setup.mode,
+        prompt: setup.prompt,
+        projectName: setup.projectName,
+        memory: { ...emptyMemory(initialScope(setup), setup.mode) },
+      });
+    }
+    logger.log(result.ok ? 'config-loaded' : 'error', {
+      source: 'system',
+      status: result.ok ? 'success' : 'error',
+      description: result.summary,
+    });
+    return result;
+  },
+
+  async start(setup) {
     if (running) return;
+    const s = setup || chosen || { mode: 'new', prompt: SCOPE };
     running = true;
     startedAt = Date.now();
     logger.log('extension-started', { source: 'extension', description: 'Extension started' });
     logger.log('config-loaded', { source: 'system', description: 'Configuration loaded — target 90%, max 6 iterations (demo)' });
-    logger.log('project-loaded', { source: 'extension', description: 'Project loaded: ' + SCOPE });
-    await orch.load(SCOPE);
+    const scope = initialScope(s);
+    logger.log('project-loaded', { source: 'extension', description: 'Project loaded (' + s.mode + '): ' + scope });
+    await orch.load(scope, s.mode);
     logger.log('state-restored', { source: 'system', description: 'State restored from storage' });
     try { await orch.run(); } catch (e) {
       logger.log('error', { status: 'error', description: String(e && e.message || e) });
@@ -239,7 +279,7 @@ const engine = {
 };
 
 const panel = createPanel({ root: document.getElementById('app'), engine, repaintMs: 400 });
-logger.log('extension-started', { source: 'extension', description: 'Demo loaded — press Start' });
+logger.log('extension-started', { source: 'extension', description: 'Demo loaded — choose a workflow' });
 panel.markDirty();
 `;
 
@@ -258,7 +298,7 @@ body { max-width: 460px; margin: 0 auto; border-left: 1px solid var(--line); bor
 <body>
 <div class="demo-note">
   Demo — the real engine, logger and UI, driven by fake AI adapters on a sped-up clock.
-  Press <strong>Start</strong>. Alt+P pause · Alt+R resume · Alt+S stop · Alt+E export.
+  Choose a workflow, run the environment check, then start. Alt+P pause · Alt+R resume · Alt+S stop · Alt+E export.
 </div>
 <div id="app"></div>
 <script type="module">

@@ -128,4 +128,33 @@ table.summary { width: 100%; border-collapse: collapse; }
 table.summary th { text-align: left; font-weight: 400; color: var(--muted); padding: 5px 0; font-size: 12px; }
 table.summary td { text-align: right; padding: 5px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 code { font-family: ui-monospace, monospace; font-size: 11px; }
+
+/* landing + preflight */
+.landing, .preflight { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.modes { display: grid; gap: 7px; margin: 8px 0 12px; }
+.modecard {
+  display: flex; flex-direction: column; gap: 3px; text-align: left; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px 11px;
+  color: var(--text); font: inherit;
+}
+.modecard:hover { border-color: var(--muted); }
+.modecard.chosen { border-color: var(--accent); background: #1f6feb1a; box-shadow: inset 2px 0 0 var(--accent); }
+.modename { font-weight: 600; font-size: 14px; }
+.modeblurb { color: var(--muted); font-size: 12px; }
+.modecard .pill { align-self: flex-start; margin-top: 3px; }
+.field { display: block; margin-bottom: 10px; }
+.field .label { display: block; margin-bottom: 4px; }
+.field input, .field textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 7px 9px; font: inherit; resize: vertical;
+}
+.field input:focus, .field textarea:focus { outline: none; border-color: var(--accent); }
+.fielderr { display: block; color: var(--bad); font-size: 11px; margin-top: 3px; }
+.explain { color: var(--muted); font-size: 12px; background: #11161d; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+.check { display: flex; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--line); align-items: flex-start; }
+.check .mark { width: 14px; text-align: center; }
+.check.ok .mark { color: var(--ok); }
+.check.bad .mark { color: var(--bad); }
+.preview { margin: 10px 0; }
+.preview pre { max-height: 260px; }
 `;
