@@ -326,8 +326,8 @@ export function renderLanding({ modes, mode, projectName = '', prompt = '', prob
  */
 export function renderPreflight(result) {
   const rows = result.checks.map((c) => `
-    <div class="check ${c.ok ? 'ok' : 'bad'}">
-      <span class="mark">${c.ok ? '✓' : '✗'}</span>
+    <div class="check ${c.ok ? 'ok' : c.blocking === false ? 'warnrow' : 'bad'}">
+      <span class="mark">${c.ok ? '✓' : c.blocking === false ? '!' : '✗'}</span>
       <div class="grow">
         <div>${esc(c.label)}</div>
         ${c.detail ? `<div class="muted small">${esc(c.detail)}</div>` : ''}
@@ -340,7 +340,7 @@ export function renderPreflight(result) {
       <div class="label">Environment check</div>
       ${rows}
       ${result.ok
-        ? '<div class="explain small">All checks passed. Nothing was created, opened or changed.</div>'
+        ? `<div class="explain small">${esc(result.summary)} Nothing was created, opened or changed.</div>`
         : '<div class="warn">The orchestrator will not open tabs, start chats or sign in to fix these. Put the environment right, then re-check.</div>'}
       <div class="controls">
         <button class="btn" data-action="recheck">Re-check</button>

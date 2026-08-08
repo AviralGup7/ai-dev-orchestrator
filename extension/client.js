@@ -81,7 +81,25 @@ export async function connectToBackground() {
     logger: () => remoteLogger(state),
     config: () => state.config,
     startedAt: () => state.startedAt,
-    start: () => send('start'),
+    /*
+     * `preflight` was MISSING from this object, and that is the whole reason
+     * the extension appeared dead.
+     *
+     * The panel calls `engine.preflight(setup)`. It came back `undefined`,
+     * calling it threw a TypeError inside a click handler, and the exception
+     * went nowhere -- so thirteen presses of "Check environment & start"
+     * produced thirteen "Pressed preflight" log lines and nothing else. The
+     * log was right; it faithfully recorded that the button was pressed and
+     * that the orchestrator then did nothing at all.
+     *
+     * Nothing caught it because the demo supplies its own `engine` object with
+     * a preflight on it, so demo.html worked perfectly while the real client
+     * did not. Two implementations of one interface, only one of them tested.
+     * There is now a test asserting the client covers every method the panel
+     * calls.
+     */
+    preflight: (setup) => send('preflight', { setup }),
+    start: (setup) => send('start', { setup }),
     pause: () => send('pause'),
     resume: () => send('resume'),
     stop: () => send('stop'),

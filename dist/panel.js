@@ -63,6 +63,8 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
   let setupProblems = [];
   let preflightResult = null;
   let promptPreview = null;
+  /** Surfaced in the panel, so a broken control is visible, not just logged. */
+  let lastError = null;
 
   root.innerHTML = `
     <header>
@@ -103,7 +105,39 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
     if (prompt) setup.prompt = prompt.value;
   }
 
-  root.addEventListener('click', async (ev) => {
+  /**
+   * EVERY HANDLER RUNS INSIDE THIS.
+   *
+   * The extension appeared completely dead because `engine.preflight` was
+   * undefined: calling it threw a TypeError inside a click handler, the
+   * rejection went nowhere, and the user pressed the button thirteen times
+   * while the log dutifully recorded thirteen presses and no consequence.
+   *
+   * An unhandled exception in a UI event handler is invisible by default --
+   * no dialog, nothing in the panel, and in a side panel not even a console
+   * anyone is looking at. That is exactly the "silent failure" the
+   * observability objective forbids, and the log proved the failure was
+   * silent rather than unlogged: the presses were recorded perfectly.
+   *
+   * So every handler is wrapped, and a thrown error becomes a logged, visible
+   * error like any other.
+   */
+  async function guarded(what, fn) {
+    try {
+      await fn();
+    } catch (err) {
+      engine.logger().log('error', {
+        status: 'error',
+        source: 'extension',
+        description: `"${what}" failed: ${String(err?.message || err || 'unknown error')}`,
+        data: { stack: err?.stack ?? null, remedy: 'This is a bug in the extension. Export the log and report it.' },
+      });
+      lastError = String(err?.message || err || 'unknown error');
+      markDirty();
+    }
+  }
+
+  root.addEventListener('click', (ev) => guarded(describeTarget(ev.target), async () => {
     const modeBtn = ev.target.closest('[data-mode]');
     if (modeBtn) {
       captureForm();
@@ -157,7 +191,19 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
       engine.logger().log('button-clicked', { description: `Pressed ${action}`, data: { action } });
 
       if (action === 'preflight' || action === 'recheck') {
+        lastError = null;
         captureForm();
+        /*
+         * Checked here too, not only in the generic dispatch below.
+         *
+         * This branch calls `engine.preflight` directly, so it bypassed the
+         * `typeof` guard entirely -- and this is the exact method that was
+         * missing. The generic guard would have caught every control except
+         * the one that actually broke.
+         */
+        if (typeof engine.preflight !== 'function') {
+          throw new Error('the "preflight" control is not connected to the background worker');
+        }
         const result = await engine.preflight(setup);
         setupProblems = result.setupProblems || [];
         preflightResult = result.ok === undefined ? result : result;
@@ -175,31 +221,52 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
         return;
       }
 
-      await engine[action]?.();
+      /*
+       * A MISSING COMMAND IS A BUG, AND IT SAYS SO.
+       *
+       * `engine[action]?.()` silently did nothing when the method did not
+       * exist -- which is how a whole button became inert without a trace.
+       * Optional chaining is the right tool for an optional thing; a control
+       * the UI is rendering is not optional.
+       */
+      if (typeof engine[action] !== 'function') {
+        throw new Error(`the "${action}" control is not connected to the background worker`);
+      }
+      await engine[action]();
       markDirty();
     }
-  });
+  }));
 
   $('#search').addEventListener('input', (ev) => {
     filters.search = ev.target.value;
     markDirty();
   });
 
+  /** A human name for whatever was clicked, for the error message. */
+  function describeTarget(el) {
+    const b = el.closest?.('[data-action],[data-mode],[data-tab]');
+    if (!b) return 'click';
+    return b.dataset.action || `mode:${b.dataset.mode}` || `tab:${b.dataset.tab}`;
+  }
+
   /*
    * Keyboard shortcuts, logged like every other user action.
    * Space is deliberately NOT bound: it scrolls, and stealing scroll in a log
    * panel is hostile.
    */
-  root.ownerDocument.addEventListener('keydown', async (ev) => {
+  root.ownerDocument.addEventListener('keydown', (ev) => guarded('shortcut', async () => {
     if (ev.target.matches('input, textarea')) return;
     const map = { p: 'pause', r: 'resume', s: 'stop', e: 'export' };
     const action = map[ev.key.toLowerCase()];
     if (!action || !ev.altKey) return;
     ev.preventDefault();
     engine.logger().log('shortcut-pressed', { description: `Alt+${ev.key.toUpperCase()} → ${action}`, data: { action } });
-    await engine[action]?.();
+    if (typeof engine[action] !== 'function') {
+      throw new Error(`the "${action}" shortcut is not connected to the background worker`);
+    }
+    await engine[action]();
     markDirty();
-  });
+  }));
 
   /* ------------------------------------------------------------ render -- */
 
@@ -256,10 +323,12 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
     $('#pane-log').hidden = false;
 
     if (screen === 'landing') {
-      $('#status').innerHTML = '';
+      $('#status').innerHTML = lastError
+        ? `<div class="err">⚠ ${esc(lastError)} — see the Activity Log.</div>`
+        : '';
       $('#log').innerHTML = renderLanding({ modes: MODES, ...setup, problems: setupProblems });
     } else {
-      $('#status').innerHTML = '';
+      $('#status').innerHTML = lastError ? `<div class="err">⚠ ${esc(lastError)}</div>` : '';
       $('#log').innerHTML =
         renderPreflight(preflightResult) + (promptPreview ? renderPromptPreview(promptPreview) : '');
     }

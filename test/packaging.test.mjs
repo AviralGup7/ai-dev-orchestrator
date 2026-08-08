@@ -15,6 +15,52 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
+/**
+ * A DOM stub with just enough behaviour for createPanel and a synthetic click.
+ *
+ * Not jsdom: this project has zero dependencies, and adding one for a handful
+ * of element stubs would also drag in the memory ceiling problems recorded in
+ * the notes. Twenty lines is cheaper than a dependency.
+ */
+function makeRoot() {
+  const handlers = { click: [], keydown: [] };
+  const node = (tag = 'div', attrs = {}) => {
+    const el = {
+      tag, dataset: { ...attrs }, hidden: false, textContent: '', value: '',
+      _html: '', attrs: {},
+      get innerHTML() { return el._html; },
+      set innerHTML(v) { el._html = v; },
+      setAttribute: (k, v) => { el.attrs[k] = v; },
+      getAttribute: (k) => el.attrs[k],
+      addEventListener: () => {},
+      querySelector: () => node(),
+      querySelectorAll: () => [],
+      closest: (sel) => {
+        const m = /\[data-([a-z]+)(?:="([^"]*)")?\]/.exec(sel);
+        if (m && el.dataset[m[1]] !== undefined) return el;
+        return null;
+      },
+      matches: () => false,
+    };
+    return el;
+  };
+
+  const cache = new Map();
+  const root = node();
+  root.addEventListener = (type, fn) => handlers[type]?.push(fn);
+  root.querySelector = (sel) => {
+    if (!cache.has(sel)) cache.set(sel, node());
+    return cache.get(sel);
+  };
+  root.querySelectorAll = () => [];
+  root.ownerDocument = { addEventListener: (type, fn) => handlers[type]?.push(fn) };
+  root.fire = async (type, dataset) => {
+    const target = node('button', dataset);
+    for (const fn of handlers[type]) await fn({ target, preventDefault() {}, key: '' });
+  };
+  return root;
+}
+
 /** A chrome shim. `idb` decides whether IndexedDB works. */
 function shim({ idb = 'ok', noReceiver = false } = {}) {
   const registered = {};
@@ -265,4 +311,192 @@ test('no extension source imports above its own root', async () => {
     assert.equal(/\.\.\/src\/core\//.test(built), false, 'the build must rewrite them');
     assert.match(built, /\.\/core\//);
   }
+});
+
+/* ====================================================== the engine contract */
+
+/**
+ * THE BUG THAT MADE THE EXTENSION LOOK DEAD.
+ *
+ * The panel calls `engine.preflight(setup)`. `client.js` never defined it, so
+ * the call returned undefined, throwing inside a click handler where nothing
+ * catches. The user pressed the button thirteen times; the exported log shows
+ * thirteen "Pressed preflight" lines and no consequence whatsoever.
+ *
+ * It survived because there are TWO implementations of the `engine` interface
+ * -- the demo builds its own, the extension uses `client.js` -- and only the
+ * demo's was exercised. demo.html worked perfectly the whole time.
+ */
+test('client.js implements every method the panel calls on `engine`', () => {
+  const panel = readFileSync(new URL('../extension/panel.js', import.meta.url), 'utf8');
+  const client = readFileSync(new URL('../extension/client.js', import.meta.url), 'utf8');
+
+  const called = new Set(
+    [...panel.matchAll(/\bengine(?:\[['"]([a-zA-Z-]+)['"]\]|\.([a-zA-Z]+))\s*\(/g)]
+      .map((m) => m[1] || m[2]),
+  );
+  // Dispatched dynamically from data-action attributes.
+  for (const m of panel.matchAll(/data-action="([a-z-]+)"/g)) called.add(m[1]);
+  for (const m of panel.matchAll(/const map = \{([^}]+)\}/g)) {
+    for (const a of m[1].matchAll(/'([a-z-]+)'/g)) called.add(a[1]);
+  }
+  // UI-only actions the panel handles itself and never forwards.
+  for (const local of ['recheck', 'back', 'confirm-start']) called.delete(local);
+
+  const provided = new Set(
+    [...client.matchAll(/^\s{4}'?([a-zA-Z-]+)'?:\s*(?:\(|async|\{)/gm)].map((m) => m[1]),
+  );
+
+  const missing = [...called].filter((m) => !provided.has(m));
+  assert.deepEqual(missing, [], `panel calls engine.${missing.join('/')} which client.js does not provide`);
+});
+
+test('the background worker implements every command client.js sends', () => {
+  /*
+   * The other half of the same seam. `open-report` was sent and never
+   * implemented, so that button was inert too -- it just had not been pressed
+   * yet.
+   */
+  const client = readFileSync(new URL('../extension/client.js', import.meta.url), 'utf8');
+  const bg = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
+
+  const sent = new Set([...client.matchAll(/send\('([a-z-]+)'/g)].map((m) => m[1]));
+  for (const m of client.matchAll(/sendMessage\(\{\s*kind:\s*'([a-z-]+)'/g)) sent.add(m[1]);
+
+  const implemented = new Set(
+    [...bg.matchAll(/^\s{2}async\s+'?([a-zA-Z-]+)'?\s*\(/gm)].map((m) => m[1]),
+  );
+
+  const missing = [...sent].filter((c) => !implemented.has(c));
+  assert.deepEqual(missing, [], `client sends "${missing.join('", "')}" which background.js does not handle`);
+});
+
+test('a missing control produces a visible error, not silence', async () => {
+  /*
+   * BEHAVIOUR, not text. The grep-based version of this test passed a
+   * sabotage that changed `if (typeof engine[action] !== 'function')` to
+   * `if (false)` -- the phrase was still in the file, so the assertion held
+   * while the guard was gone. A test that reads source text tests the source
+   * text.
+   *
+   * So this drives the real panel with an engine that is deliberately missing
+   * a method, and asserts something the user would actually see.
+   */
+  const { createPanel } = await import('../extension/panel.js');
+  const { Logger } = await import('../src/core/logger.js');
+
+  const logger = new Logger();
+  const root = makeRoot();
+  const panel = createPanel({
+    root,
+    repaintMs: 100000, // no timer during the test
+    engine: {
+      memory: () => null,
+      logger: () => logger,
+      config: () => ({}),
+      startedAt: () => null,
+      // `preflight` is deliberately absent — the exact original bug.
+    },
+  });
+
+  await root.fire('click', { action: 'preflight' });
+  panel.destroy();
+
+  const err = logger.live.find((e) => e.status === 'error');
+  assert.ok(err, 'pressing a disconnected control must log an error');
+  assert.match(err.description, /preflight/);
+  assert.match(err.description, /not connected to the background worker/);
+});
+
+test('the panel never calls a control without checking it exists', () => {
+  /*
+   * `engine[action]?.()` silently did nothing for a missing method. Optional
+   * chaining is right for an optional thing; a control the UI is rendering is
+   * not optional, and treating it as one is how a button becomes inert
+   * without a trace.
+   */
+  /*
+   * Comments are stripped first. The panel EXPLAINS the old mistake in prose
+   * right next to the fix, and a checker that reads its own rationale as code
+   * is the false positive already fixed once in check-loadable.mjs.
+   */
+  const panel = readFileSync(new URL('../extension/panel.js', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.equal(/engine\[action\]\?\.\(/.test(panel), false,
+    'optional-call on a rendered control hides a missing command');
+  assert.match(panel, /typeof engine\[action\] !== 'function'/);
+});
+
+test('every UI handler is wrapped so a throw cannot vanish', () => {
+  /*
+   * An unhandled exception in a side-panel event handler produces no dialog,
+   * nothing in the panel, and no console anyone is watching. The log proved
+   * the failure was SILENT rather than unlogged -- the button presses were
+   * recorded perfectly, and nothing followed them.
+   */
+  const panel = readFileSync(new URL('../extension/panel.js', import.meta.url), 'utf8');
+  assert.match(panel, /async function guarded\(/);
+  for (const [, , handler] of panel.matchAll(/addEventListener\('(click|keydown)',\s*([^\n]+)/g)) {
+    assert.match(handler, /guarded\(/, `a ${handler} handler is not wrapped`);
+  }
+});
+
+/* ============================================================ tab probing */
+
+test('the probe finds the three surfaces among ordinary tabs', async () => {
+  const { snapshotEnvironment } = await import('../extension/probe.js');
+  const snap = await snapshotEnvironment({
+    query: async () => [
+      { id: 1, windowId: 1, url: 'https://news.ycombinator.com/', title: 'HN' },
+      { id: 11, windowId: 1, url: 'https://chatgpt.com/c/68f21abc-1111', title: 'PM', active: true },
+      { id: 22, windowId: 1, url: 'https://arena.ai/w/ws-reporting', title: 'repo' },
+      { id: 33, windowId: 1, url: 'https://chat.deepseek.com/a/chat/s/9c04', title: 'strategy' },
+      { id: 4, windowId: 1, url: '', title: '' }, // no host permission
+    ],
+  });
+  assert.equal(snap.surfaces.manager.conversationId, '68f21abc-1111');
+  assert.equal(snap.surfaces.engineer.conversationId, 'ws-reporting');
+  assert.equal(snap.surfaces.reviewer.conversationId, '9c04');
+  assert.equal(snap.scanned, 5);
+});
+
+test('a ChatGPT tab on the new-chat screen yields no conversation id', async () => {
+  /*
+   * This is the case that must NOT silently pass: binding to a "new chat"
+   * screen means the first paste CREATES a conversation, which is forbidden.
+   * The probe reports null and bind() refuses.
+   */
+  const { snapshotEnvironment } = await import('../extension/probe.js');
+  const snap = await snapshotEnvironment({
+    query: async () => [{ id: 11, windowId: 1, url: 'https://chatgpt.com/', title: 'ChatGPT' }],
+  });
+  assert.equal(snap.surfaces.manager.conversationId, null);
+});
+
+test('two tabs for one role prefer the active one and record the ambiguity', async () => {
+  /*
+   * Users keep several ChatGPT tabs open. Silently picking one could drive a
+   * conversation they were not looking at, and the run would appear to work.
+   */
+  const { snapshotEnvironment } = await import('../extension/probe.js');
+  const snap = await snapshotEnvironment({
+    query: async () => [
+      { id: 11, windowId: 1, url: 'https://chatgpt.com/c/aaa', title: 'old', active: false },
+      { id: 12, windowId: 1, url: 'https://chatgpt.com/c/bbb', title: 'current', active: true },
+    ],
+  });
+  assert.equal(snap.surfaces.manager.conversationId, 'bbb', 'the active tab wins');
+  assert.equal(snap.ambiguous.manager, 2, 'and the ambiguity is reported, not hidden');
+});
+
+test('the probe requests no "tabs" permission it does not need', () => {
+  /*
+   * chrome.tabs.query works without it; url and title are simply blank for
+   * tabs the extension has no host permission for. Since the manifest grants
+   * exactly the four AI hosts, the extension can see what it must drive and
+   * is blind to everything else.
+   */
+  const manifest = JSON.parse(readFileSync(new URL('../extension/manifest.template.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.permissions.includes('tabs'), false);
 });

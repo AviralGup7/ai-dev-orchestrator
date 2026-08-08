@@ -442,6 +442,63 @@ const CASES = [
     expect: 'survives a browser with no panel open',
     test: 'test/packaging.test.mjs',
   },
+  /* ---- the silent button (session 6) ------------------------------- */
+  {
+    name: 'client.js loses its preflight method again',
+    file: 'extension/client.js',
+    from: "    preflight: (setup) => send('preflight', { setup }),",
+    to: '',
+    expect: 'implements every method the panel calls',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'the panel goes back to optional-calling controls',
+    file: 'extension/panel.js',
+    from: "        if (typeof engine.preflight !== 'function') {\n          throw new Error('the \"preflight\" control is not connected to the background worker');\n        }\n",
+    to: '',
+    expect: 'missing control produces a visible error',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'click handlers are unwrapped, so a throw vanishes',
+    file: 'extension/panel.js',
+    from: "  root.addEventListener('click', (ev) => guarded(describeTarget(ev.target), async () => {",
+    to: "  root.addEventListener('click', async (ev) => { const _ = 0;",
+    expect: 'every UI handler is wrapped',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'a storage warning blocks the run again',
+    file: 'src/core/preflight.js',
+    from: '    ok: blocking.length === 0,',
+    to: '    ok: failed.length === 0,',
+    expect: 'warning does not block the run',
+    test: 'test/firstrun.test.mjs',
+  },
+  {
+    name: 'checks default to non-blocking',
+    file: 'src/core/preflight.js',
+    from: "function check(key, label, ok, detail = '', remedy = '', blocking = true) {",
+    to: "function check(key, label, ok, detail = '', remedy = '', blocking = false) {",
+    expect: 'blocking by default',
+    test: 'test/firstrun.test.mjs',
+  },
+  {
+    name: 'the probe accepts a new-chat tab as a conversation',
+    file: 'extension/probe.js',
+    from: '      conversationId: conversationIdFor(spec, tab.url),',
+    to: "      conversationId: conversationIdFor(spec, tab.url) || 'new',",
+    expect: 'new-chat screen yields no conversation id',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'duplicate tabs for one role are silently collapsed',
+    file: 'extension/probe.js',
+    from: '      (ambiguous[spec.key] ||= [surfaces[spec.key]]).push(entry);',
+    to: '      /* ignored */',
+    expect: 'record the ambiguity',
+    test: 'test/packaging.test.mjs',
+  },
 ];
 
 let caught = 0;

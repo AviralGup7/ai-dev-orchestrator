@@ -155,6 +155,7 @@ code { font-family: ui-monospace, monospace; font-size: 11px; }
 .check .mark { width: 14px; text-align: center; }
 .check.ok .mark { color: var(--ok); }
 .check.bad .mark { color: var(--bad); }
+.check.warnrow .mark { color: var(--warn); }
 .preview { margin: 10px 0; }
 .preview pre { max-height: 260px; }
 `;

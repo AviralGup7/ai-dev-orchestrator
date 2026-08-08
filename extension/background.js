@@ -26,6 +26,11 @@ import { bridgeToLogger } from '../src/core/bridge.js';
 import { toNdjson } from '../src/core/logsink.js';
 import { summarise } from '../src/core/logger.js';
 import { IdbLogSink, ChromeStore } from './idbsink.js';
+import { preflight } from '../src/core/preflight.js';
+import { composeFirstPrompt } from '../src/core/protocol.js';
+import { initialScope, validateSetup } from '../src/core/modes.js';
+import { emptyMemory } from '../src/core/types.js';
+import { snapshotEnvironment, EXPECTED_HOSTS } from './probe.js';
 
 /**
  * Never let an error about an error hide the real one.
@@ -47,6 +52,8 @@ const logger = new Logger({ sink, liveLimit: 500, onEvent: broadcast });
 let orch = null;
 let startedAt = null;
 let running = false;
+/** The setup that passed preflight, so Start does not re-ask for it. */
+let pendingSetup = null;
 
 /* Clicking the icon opens the side panel next to the current tab. It does not
    create, close or navigate a tab -- see docs/ENVIRONMENT.md. */
@@ -128,7 +135,7 @@ function notify(title, message) {
   });
 }
 
-async function ensureOrchestrator() {
+async function ensureOrchestrator(setup = null) {
   if (orch) return orch;
   const { config = {} } = await chrome.storage.local.get('config');
   orch = new Orchestrator({
@@ -142,8 +149,11 @@ async function ensureOrchestrator() {
     config,
     onEvent: bridgeToLogger(logger),
   });
-  await orch.load();
-  logger.log('state-restored', { source: 'system', description: 'Project memory loaded from storage' });
+  await orch.load(setup ? initialScope(setup) : '', setup?.mode || 'new');
+  logger.log('state-restored', {
+    source: 'system',
+    description: `Project memory loaded${setup ? ` — mode "${setup.mode}"` : ''}`,
+  });
   return orch;
 }
 
@@ -153,9 +163,10 @@ const COMMANDS = {
     return snapshot();
   },
 
-  async start() {
+  async start(msg = {}) {
     if (running) return { ok: false, why: 'already running' };
-    const o = await ensureOrchestrator();
+    const setup = msg.setup || pendingSetup;
+    const o = await ensureOrchestrator(setup);
     if (!o.manager || !o.engineer) {
       /*
        * HONEST REFUSAL RATHER THAN A SILENT NO-OP.
@@ -202,6 +213,62 @@ const COMMANDS = {
   },
   async skip() { orch?.skipStep(); broadcast(); },
   async retry() { orch?.retryStep(); broadcast(); },
+
+  /**
+   * Read the pre-opened environment and validate it.
+   *
+   * Reads only. `chrome.tabs.query` inspects tabs that already exist; nothing
+   * is created, closed or navigated.
+   */
+  async preflight({ setup }) {
+    const check = validateSetup(setup || {});
+    const snapshot = await snapshotEnvironment();
+
+    const result = await preflight({
+      setup,
+      snapshot,
+      hosts: EXPECTED_HOSTS,
+      reviewerEnabled: Boolean((await chrome.storage.local.get('config'))?.config?.reviewerEnabled),
+      logger,
+      store,
+    });
+    result.setupProblems = check.problems;
+
+    /*
+     * The composed prompt is returned so the panel can SHOW IT BEFORE SENDING.
+     * The spec promises the user never assembles context by hand; that is only
+     * trustworthy if they can see what was assembled on their behalf.
+     */
+    if (result.ok) {
+      pendingSetup = setup;
+      result.prompt = composeFirstPrompt({
+        mode: setup.mode,
+        prompt: setup.prompt,
+        projectName: setup.projectName,
+        memory: emptyMemory(initialScope(setup), setup.mode),
+      });
+    }
+
+    logger.log(result.ok ? 'config-loaded' : 'error', {
+      source: 'system',
+      status: result.ok ? 'success' : 'error',
+      description: result.summary,
+      data: { failed: result.problems.map((p) => `${p.label}: ${p.detail}`) },
+    });
+    broadcast();
+    return result;
+  },
+
+  /** "View Latest Report" — honest about not existing yet. */
+  async 'open-report'() {
+    logger.log('user-action', {
+      source: 'user',
+      status: 'warning',
+      description: 'No report has been generated yet — reports appear after the first iteration.',
+    });
+    broadcast();
+    return { ok: false, why: 'no report yet' };
+  },
 
   async log({ type, fields }) {
     logger.log(type, fields);

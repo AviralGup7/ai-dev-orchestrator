@@ -211,3 +211,102 @@ people learn to disbelieve is worse than no checker.
   pulling.
 * **Reloading in Chrome does not rebuild.** After editing `src/` or
   `extension/`, run `npm run build` again, then hit reload on the extension.
+
+---
+
+# The silent button
+
+*Reported by exporting a log — which is exactly what the log is for.*
+
+Seventeen events. Two of them mattered:
+
+```
+000002  user  settings-changed  Workflow mode set to "explore"
+000003  user  button-clicked    Pressed preflight
+000004  user  button-clicked    Pressed preflight
+   … eleven more …
+```
+
+Thirteen presses of **Check environment & start**, and nothing after any of
+them. Not an error, not a warning — nothing. The log was working perfectly and
+faithfully recording that the orchestrator did nothing at all.
+
+## Cause
+
+`panel.js` calls `engine.preflight(setup)`. **`client.js` never defined it.**
+The call returned `undefined`, invoking it threw a `TypeError` inside a click
+handler, and the rejection went nowhere.
+
+It survived because there are **two implementations of the `engine`
+interface**: the demo builds its own, the extension uses `client.js`. Only the
+demo's was exercised — so `demo.html` worked flawlessly the entire time while
+the real extension had an inert button. Two implementations of one interface,
+one of them tested.
+
+`open-report` was broken the same way, unimplemented in `background.js`. It
+had simply not been pressed yet.
+
+## Fixes
+
+**The missing methods.** `preflight` added to `client.js`; `preflight` and
+`open-report` implemented in `background.js`.
+
+**`extension/probe.js`** — the missing half of the environment contract.
+`src/core/environment.js` judges snapshots and has never heard of a tab; this
+produces the snapshots from `chrome.tabs.query`. Reads only: nothing is
+created, closed or navigated. It requests **no `tabs` permission** —
+`tabs.query` works without it and returns blank URLs for hosts the extension
+has no permission for, which given the four host permissions is exactly the
+right amount of blindness.
+
+**A silent click is now impossible.** Every handler runs inside `guarded()`,
+which turns a throw into a logged, visible error. And `engine[action]?.()`
+became an explicit check: optional chaining is right for an optional thing, and
+a control the UI is *rendering* is not optional.
+
+## A contradiction the log exposed
+
+With the button working, preflight reported:
+
+```
+1 of 9 checks failed: Durable log storage
+```
+
+and disabled Start — while that check's own remedy read *"The run can proceed,
+but the log will not survive a restart."* The checklist contradicted its own
+advice, and a checklist that does that trains people to ignore it.
+
+Checks now carry `blocking`, defaulting to **true** so a new check cannot be
+waved through by forgetting. `ok` means *may the run start*, not *is everything
+perfect*. Degraded is not broken: losing the durable log costs history after a
+restart, refusing to start costs the run.
+
+```
+all 9 checks passed, with 1 warning(s): Durable log storage
+prompt composed: 4,980 chars
+```
+
+## A test that tested its own text
+
+The first version of the "controls are checked" test grepped `panel.js` for the
+guard. Sabotage changed `if (typeof engine[action] !== 'function')` to
+`if (false)` — the phrase was still in the file, so the test passed while the
+guard was gone.
+
+Replaced with one that drives the real panel through a small DOM stub, using an
+engine deliberately missing a method, and asserts on the logged error. That
+immediately found something the grep version could not: the `preflight` branch
+calls `engine.preflight` **directly** and bypassed the generic guard entirely —
+so the guard covered every control except the one that had actually broken.
+
+## Verification
+
+```
+221 tests, 0 failures
+60/60 sabotages caught
+dist/ loadable — 35 files, worker evaluates and answers
+```
+
+Simulated against realistic tabs: three surfaces found among ordinary browsing,
+a new-chat tab correctly yielding no conversation id, duplicate tabs preferring
+the active one and recording the ambiguity.

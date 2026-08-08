@@ -494,6 +494,36 @@ test('preflight leaves an existing stored project intact', async () => {
   assert.match(r.checks.find((c) => c.key === 'storage').detail, /iteration 7/);
 });
 
+test('a warning does not block the run, but a real failure does', async () => {
+  /*
+   * The checklist used to say "the run can proceed" in the remedy and then
+   * return ok:false, which stopped it. A checklist that contradicts its own
+   * advice trains people to ignore it, and the user's exported log showed
+   * exactly that outcome: preflight ran, reported a storage warning, and the
+   * Start button stayed disabled with no explanation of the discrepancy.
+   */
+  const args = fresh();
+  args.logger = new Logger({ sink: { async append() { throw new Error('quota exceeded'); }, async all() { return []; } }, flushEvery: 1 });
+  const warned = await preflight(args);
+  assert.equal(warned.ok, true, 'degraded is not broken — the run may start');
+  assert.equal(warned.warnings.length, 1);
+  assert.equal(warned.problems.length, 0);
+  assert.match(warned.summary, /with 1 warning/);
+
+  const broken = fresh();
+  delete broken.snapshot.surfaces.engineer;
+  const stopped = await preflight(broken);
+  assert.equal(stopped.ok, false, 'a missing Arena tab genuinely blocks');
+  assert.ok(stopped.problems.length > 0);
+});
+
+test('checks are blocking by default, so a new one cannot be waved through', async () => {
+  const r = await preflight(fresh());
+  const nonBlocking = r.checks.filter((c) => c.blocking === false).map((c) => c.key);
+  assert.deepEqual(nonBlocking, [], 'only log-durable may be non-blocking, and only when it fails');
+  for (const c of r.checks) assert.equal(c.blocking, true);
+});
+
 test('a broken durable log is a WARNING, not a refusal to start', async () => {
   /*
    * The in-memory log still works, so the user can watch the run — they just

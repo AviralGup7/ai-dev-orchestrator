@@ -26,9 +26,20 @@
 import { bind, EnvironmentError, describe as describeDrift } from './environment.js';
 import { getMode, validateSetup } from './modes.js';
 
-/** One row of the checklist the UI renders. */
-function check(key, label, ok, detail = '', remedy = '') {
-  return { key, label, ok, detail, remedy };
+/**
+ * One row of the checklist the UI renders.
+ *
+ * `blocking` separates "this must be fixed before starting" from "you should
+ * know this". The distinction was implied by the wording of the remedies and
+ * not implemented: the durable-log check told the user "the run can proceed"
+ * and then set `ok:false`, which stopped the run. A checklist that contradicts
+ * its own advice trains people to ignore it.
+ *
+ * Blocking by default -- a new check that forgot to say should stop the run
+ * rather than be quietly waved through.
+ */
+function check(key, label, ok, detail = '', remedy = '', blocking = true) {
+  return { key, label, ok, detail, remedy, blocking };
 }
 
 /**
@@ -173,7 +184,8 @@ export async function preflight({
       if (failed) {
         checks.push(
           check('log-durable', 'Durable log storage', false, `IndexedDB rejected the write: ${failure}`,
-            'Free disk space or clear old logs. The run can proceed, but the log will not survive a restart.'),
+            'Free disk space or clear old logs. The run can proceed, but the log will not survive a restart.',
+            false),
         );
       } else {
         checks.push(check('log-durable', 'Durable log storage', true, 'accepting writes'));
@@ -249,14 +261,28 @@ export async function preflight({
   }
 
   const failed = checks.filter((c) => !c.ok);
+  const blocking = failed.filter((c) => c.blocking);
+  const warnings = failed.filter((c) => !c.blocking);
+
   return {
-    ok: failed.length === 0,
+    /*
+     * `ok` means "may the run start", not "is everything perfect".
+     *
+     * Degraded is not broken. Losing the durable log costs the user their
+     * history after a restart; refusing to start costs them the run. Blocking
+     * on it would turn a degraded-but-usable session into no session, which is
+     * the trade this project consistently refuses to make.
+     */
+    ok: blocking.length === 0,
     checks,
     binding,
-    problems: failed,
-    summary: failed.length
-      ? `${failed.length} of ${checks.length} checks failed: ${failed.map((c) => c.label).join(', ')}`
-      : `all ${checks.length} checks passed`,
+    problems: blocking,
+    warnings,
+    summary: blocking.length
+      ? `${blocking.length} of ${checks.length} checks failed: ${blocking.map((c) => c.label).join(', ')}`
+      : warnings.length
+        ? `all ${checks.length} checks passed, with ${warnings.length} warning(s): ${warnings.map((c) => c.label).join(', ')}`
+        : `all ${checks.length} checks passed`,
   };
 }
 
