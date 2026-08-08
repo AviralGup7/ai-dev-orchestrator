@@ -293,11 +293,18 @@ this is a configuration and documentation change, not a rewrite.
 
 ## 11. Prioritised
 
+### Done (2026-08-08)
+
+| # | Change | Evidence |
+|---|---|---|
+| ~~1~~ | ~~Write `failedAttempts`~~ | **done** — written on failed/contradicted iterations, capped at 10, and *rendered into the prompt*, which was a second gap: the field was never printed either |
+| ~~2~~ | ~~`regression` stop reason~~ | **done** — `82% → 41%` now returns `reason: 'regression'` with "consider reverting"; `70→69→67` still reads as a plateau |
+| ~~3~~ | ~~Act on the rate-limit signal~~ | **done** — `classifySignals()` returns `retry: false`; the worker pauses and notifies instead of retrying into an exhausted quota |
+
+### Remaining
+
 | # | Change | Effort | Why |
 |---|---|---|---|
-| 1 | Write `failedAttempts` | ~2h | dead field; largest learning gain |
-| 2 | `regression` stop reason | ~2h | a crash is currently labelled "no progress" |
-| 3 | Act on the rate-limit signal | ~2h | the scanner already detects it |
 | 4 | Check acceptance criteria | ~half day | the #1 frontier-model failure |
 | 5 | Call budget, not just iterations | ~half day | the AutoGPT lesson |
 | 6 | Token-budgeted context | ~1 day | the #1 Sonnet failure |
@@ -305,8 +312,10 @@ this is a configuration and documentation change, not a rewrite.
 | 8 | API transport for ChatGPT/DeepSeek | ~2 days | ToS, reliability, kills the selectors |
 | 9 | Revert-to-good-SHA | ~2 days | nothing recovers from a bad run |
 
-1–3 are small and each removes a way to be silently wrong. I would do those
-first regardless of what else is chosen.
+**Item 9 is now the most valuable remaining change.** Fixing #2 means the
+system can finally *say* "the project got measurably worse — consider
+reverting", but it still cannot do it. Advice the tool cannot act on is the
+weakest form of the judgement this product claims.
 
 ---
 
