@@ -20,6 +20,7 @@
  */
 
 import { overall, unmeasured } from './scoring.js';
+import { iterationIsTrustworthy, describeSkips } from './controls.js';
 
 export const DEFAULTS = {
   /** Overall score the user is aiming at. */
@@ -105,6 +106,28 @@ export function shouldStop(memory, config = {}) {
           stop: false,
           reason: null,
           why: `${o.score}% reached, but ${o.missing.length} dimension(s) were never scored`,
+        };
+      }
+
+      /*
+       * YOU MAY SKIP. YOU MAY NOT SKIP YOUR WAY TO "DONE".
+       *
+       * The user can step over `execute` or `evaluate` from the UI. That is
+       * permitted -- refusing outright just gets worked around by stopping and
+       * restarting, which hides the skip entirely. But the iteration that
+       * produced the winning scorecard must have actually done the work behind
+       * it, or the target has been reached on a record with holes in it.
+       *
+       * Only the iteration whose scores are being trusted is checked. Skipping
+       * a review in iteration 3 has no bearing on evidence gathered in
+       * iteration 20; failing the run for it would make Skip useless.
+       */
+      const deciding = memory.history?.[memory.history.length - 1];
+      if (!iterationIsTrustworthy(deciding)) {
+        return {
+          stop: false,
+          reason: null,
+          why: `${o.score}% reached, but ${describeSkips(deciding)}`,
         };
       }
 

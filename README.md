@@ -9,11 +9,16 @@ Not a coding assistant. Not a prompt-copier. The distinguishing claim is
 **judgement**: it decides what to work on next, notices when it is going in
 circles, and stops when it is actually done.
 
-> **Status: walking skeleton + environment contract.** The orchestration engine
-> is complete and tested — state machine, memory, scoring, loop detection, stop
-> conditions — and it now refuses to touch anything the user did not prepare
-> for it. The AI adapters are next. See [`docs/SPEC.md`](docs/SPEC.md) and
-> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md).
+> **Status: engine + environment contract + full observability UI.** The
+> orchestration engine, the pre-initiated environment contract, the logging
+> subsystem and the side-panel UI are complete and tested. The AI adapters are
+> the remaining milestone. See [`docs/SPEC.md`](docs/SPEC.md),
+> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) and
+> [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md).
+>
+> **Try it without installing:** `npm run demo` writes `demo.html` — the real
+> engine, logger and UI driven by fake adapters on a sped-up clock. Open it and
+> press Start.
 
 ## Roles
 
@@ -50,7 +55,16 @@ not sufficient.
 is what makes the roadmap's local companion a *new adapter* rather than a
 rewrite — and it is enforced by `npm run purity`, not by convention.
 
-**3 · The environment is inherited, never created.**
+**3 · Nothing happens invisibly.**
+
+Every meaningful event is logged with a unique, sortable id, a source, a
+status and a duration — then rendered in an Activity Log that opens first,
+because during a run it is the source of truth. The log is two-tier: a durable
+IndexedDB record that never discards, and a bounded live view that says how
+many events it is not showing. You can always see what it is doing, why, what
+happened before, what comes next, and stop it.
+
+**4 · The environment is inherited, never created.**
 
 The tabs are already open, the conversations are already chosen, and the user
 is already signed in. The orchestrator switches focus between those tabs, types
@@ -79,8 +93,19 @@ src/core/        the engine — pure, no browser, runs in Node
   environment.js   bind() / verify() — is this still the prepared environment?
   guard.js         the only route from the engine to a transport
   journal.js       the copy-pasteable markdown run log
-src/adapters/    per-AI request/response shaping
+  events.js        the closed event vocabulary + workflow stages
+  logger.js        the logging subsystem + session summary
+  logsink.js       durable sink interface, NDJSON/CSV export
+  status.js        the five questions, derived from memory + log
+  controls.js      start/pause/skip/retry, and what skip costs
+  bridge.js        engine events -> Activity Log entries
+src/adapters/    per-AI request/response shaping (next milestone)
 src/transports/  the only layer that knows about tabs
+extension/       manifest, service worker, popup, side panel, renderers
+  ui.js            pure render functions, unit-tested without a browser
+  panel.js         side-panel controller
+  background.js    owns the run; survives panel close and MV3 eviction
+  idbsink.js       IndexedDB log store + chrome.storage memory store
 docs/SPEC.md          the specification
 docs/ENVIRONMENT.md   the pre-initiated environment contract
 ```
@@ -88,11 +113,13 @@ docs/ENVIRONMENT.md   the pre-initiated environment contract
 ## Commands
 
 ```
-npm test            94 tests, no browser required
+npm test            149 tests, no browser required
 npm run purity      fails if the engine grows a browser dependency
 npm run env-safety  fails if anything can open/close/navigate a tab
-npm run sabotage    breaks the code 15 ways; every break must fail a named test
-npm run check       purity + env-safety + tests
+npm run sabotage    breaks the code 34 ways; every break must fail a named test
+npm run demo        builds demo.html — the real UI, fake AIs, sped-up clock
+npm run smoke       runs the demo headlessly and checks the log is coherent
+npm run check       purity + env-safety + tests + demo build
 ```
 
 ## A risk worth stating

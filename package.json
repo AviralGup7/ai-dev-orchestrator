@@ -1,16 +1,17 @@
 {
   "name": "ai-dev-orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A browser extension that orchestrates ChatGPT, Arena and DeepSeek to autonomously improve a software project.",
   "type": "module",
   "private": true,
   "scripts": {
     "test": "node --test test/",
-    "test:ci": "node tools/ci-test.mjs",
     "purity": "node tools/check-purity.mjs",
     "env-safety": "node tools/check-env-safety.mjs",
     "sabotage": "node tools/sabotage.mjs",
-    "check": "npm run purity && npm run env-safety && npm test"
+    "demo": "node tools/build-demo.mjs",
+    "smoke": "node tools/smoke-demo.mjs",
+    "check": "npm run purity && npm run env-safety && npm test && npm run demo"
   },
   "engines": {
     "node": ">=20"

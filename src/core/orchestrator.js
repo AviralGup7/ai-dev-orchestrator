@@ -32,6 +32,7 @@ import { scoreTesting, reconcile, merge, overall } from './scoring.js';
 import { detect } from './detect.js';
 import { shouldStop, DEFAULTS } from './stop.js';
 import { EnvironmentError, describe as describeDrift } from './environment.js';
+import { recordSkip } from './controls.js';
 
 export class Orchestrator {
   /**
@@ -383,7 +384,44 @@ export class Orchestrator {
     if (!(await this.checkEnvironment(`iteration ${record.n} / ${phase}`, record.n))) {
       throw new EnvironmentError(this.memory.block.problems);
     }
-    return fn();
+
+    /*
+     * SKIP IS CONSUMED HERE, NOT INSIDE EACH PHASE.
+     *
+     * Putting the check in the phases would mean four copies of it, and the
+     * fifth phase added later would silently not honour Skip. It is also the
+     * right place semantically: skipping means the phase never runs, so the
+     * decision belongs to the caller.
+     *
+     * The skip is recorded on the iteration permanently. `stop.js` refuses to
+     * declare victory on an iteration that skipped an evidence phase -- see
+     * controls.js for why permitting-with-consequence beats refusing.
+     */
+    if (this._skipNext) {
+      this._skipNext = false;
+      recordSkip(record, phase);
+      this.emit('step-skipped', { phase, iteration: record.n, n: record.n });
+      return undefined;
+    }
+
+    /*
+     * RETRY RE-RUNS THE PHASE, ONCE, AND SAYS SO.
+     *
+     * Bounded deliberately: an unbounded retry against a manager that returns
+     * malformed responses produces the same malformed response forever and
+     * burns the user's budget while the Activity Log fills with identical
+     * lines. One retry covers the transient case (a tab that was mid-render);
+     * anything worse is a real failure the user should see.
+     */
+    try {
+      return await fn();
+    } catch (err) {
+      if (!this._retryNext) throw err;
+      this._retryNext = false;
+      record.retried = [...new Set([...(record.retried || []), phase])];
+      this.emit('step-retried', { phase, iteration: record.n, n: record.n, after: String(err?.message || err) });
+      return fn();
+    }
   }
 
   /* ---------------------------------------------------------------- plan -- */
@@ -584,10 +622,32 @@ export class Orchestrator {
 
   pause() {
     this._paused = true;
+    this.emit('workflow-paused', { source: 'user' });
   }
 
   resume() {
     this._paused = false;
+    this.emit('workflow-resumed', { source: 'user' });
+  }
+
+  /**
+   * Skip the NEXT phase to run.
+   *
+   * "Next", not "current": by the time a user can press the button, the
+   * current phase is already awaiting an AI that will answer regardless.
+   * Pretending to cancel it would be a lie in the Activity Log -- the response
+   * still arrives, and a log that claims a step was skipped while its result
+   * is visibly being used is worse than no button at all.
+   */
+  skipStep() {
+    this._skipNext = true;
+    this.emit('step-skip-requested', { source: 'user' });
+  }
+
+  /** Retry the next phase that throws. One attempt; see `gate()`. */
+  retryStep() {
+    this._retryNext = true;
+    this.emit('step-retry-requested', { source: 'user' });
   }
 
   async stop() {
