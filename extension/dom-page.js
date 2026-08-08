@@ -11,6 +11,7 @@
  */
 
 import { SELECTORS, pageProbe } from '../src/transports/dom.js';
+import { REPORT_FENCE } from '../src/core/protocol.js';
 
 /**
  * Type into the composer.
@@ -87,7 +88,8 @@ export function createPageReader(getBinding) {
 
   return {
     async read(surface) {
-      return run(surface, pageProbe, [SELECTORS[surface]]);
+      /* The fence is passed in: `func` is serialised and loses its closure. */
+      return run(surface, pageProbe, [SELECTORS[surface], REPORT_FENCE]);
     },
     async type(surface, text) {
       const r = await run(surface, pageType, [SELECTORS[surface], text]);

@@ -372,7 +372,9 @@ test('progress is REPORTED during a long wait, not just endured', async () => {
 
 test('A REPLY WE CANNOT SEE IS DIAGNOSED AS OUR BUG, NOT REPORTED AS NO REPLY', async () => {
   // A page that accepted the prompt but whose assistant turns match nothing.
-  const blind = fakePage([{ composer: true, busy: undefined, turns: 0, lastText: '' }]);
+  // pageChars is what makes this "blind", not "blank" — the Arena page had
+  // 113,671 elements on it while we read zero turns.
+  const blind = fakePage([{ composer: true, busy: undefined, turns: 0, lastText: '', pageChars: 45_000 }]);
   const t = new DomTransport({ page: blind.page, now: blind.now, wait: blind.wait });
 
   const err = await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 })
@@ -381,7 +383,7 @@ test('A REPLY WE CANNOT SEE IS DIAGNOSED AS OUR BUG, NOT REPORTED AS NO REPLY', 
   assert.ok(err instanceof TransportError, 'a blind read must fail loudly');
   assert.equal(err.detail.phase, 'selector-miss',
     'the phase must name OUR fault, not the model\'s silence');
-  assert.match(err.message, /selectors matched/,
+  assert.match(err.message, /do not match this page/,
     'the message must point at the selectors, since that is what a human has to fix');
   assert.deepEqual(err.detail.tried, SELECTORS.engineer.turns,
     'it must report which selectors were tried, so the fix is one line');
@@ -441,4 +443,121 @@ test('the wait for a FIRST turn reports progress, not just the wait for completi
   assert.ok(early.length >= 2,
     `expected heartbeats while waiting for the first turn, got ${early.length}`);
   assert.ok(early[0].elapsedMs >= 60_000, 'the first heartbeat should land at about a minute');
+});
+
+/* ---------------------------------------------------------------------------
+ * pageProbe — the function that runs INSIDE the page.
+ *
+ * It had no direct test at all, which is why the Arena blindness could only be
+ * found by a user watching a real run. These drive it against a DOM stub.
+ * ------------------------------------------------------------------------ */
+
+/** Minimal document stub: only what pageProbe touches. */
+function fakeDom({ html = {}, bodyText = '' } = {}) {
+  const el = (text) => ({
+    innerText: text,
+    getBoundingClientRect: () => ({ width: 10, height: 10 }),
+  });
+  return {
+    body: { innerText: bodyText },
+    title: 'Arena',
+    querySelector: (sel) => (html[sel]?.length ? el(html[sel][0]) : null),
+    querySelectorAll: (sel) => (html[sel] || []).map(el),
+  };
+}
+
+function withDom(dom, fn) {
+  const g = globalThis;
+  const savedDoc = g.document, savedLoc = g.location, savedCs = g.getComputedStyle;
+  g.document = dom;
+  g.location = { href: 'https://arena.ai/agent/019fa9f8' };
+  g.getComputedStyle = () => ({ display: 'block', visibility: 'visible' });
+  try { return fn(); } finally {
+    g.document = savedDoc; g.location = savedLoc; g.getComputedStyle = savedCs;
+  }
+}
+
+test('pageProbe FINDS THE REPORT BY ITS FENCE WHEN EVERY SELECTOR MISSES', async () => {
+  /*
+   * The exact Arena situation: composer present, reply rendered, and not one
+   * `turns` selector matching. The fence is ours, so it is findable regardless
+   * of how the page is marked up.
+   */
+  const { pageProbe } = await import('../src/transports/dom.js');
+  const report = '```ORCHESTRATOR-REPORT\n{ "taskStatus": "complete" }\n```';
+  const dom = fakeDom({
+    html: { '[data-testid="composer"]': ['type here'] },   // composer only
+    bodyText: `Arena sidebar\nNew Chat\nLeaderboard\n\nSure, here is the result.\n${report}`,
+  });
+
+  const out = withDom(dom, () => pageProbe(SELECTORS.engineer, 'ORCHESTRATOR-REPORT'));
+
+  assert.equal(out.turns, 0, 'the premise: no turn selector matches');
+  assert.equal(out.via, 'fence', 'it must report that it fell back');
+  assert.ok(out.lastText.includes('"taskStatus": "complete"'),
+    'the report must be recovered even though no selector matched');
+  assert.ok(!out.lastText.includes('Leaderboard'),
+    'it must start AT the fence, not hand the sidebar to the parser');
+});
+
+test('pageProbe prefers a real selector match over the fence fallback', async () => {
+  const { pageProbe } = await import('../src/transports/dom.js');
+  const dom = fakeDom({
+    html: {
+      '[data-testid="composer"]': ['type here'],
+      '[data-role="assistant"]': ['the precise reply'],
+    },
+    bodyText: 'chrome\n```ORCHESTRATOR-REPORT\n{}\n```',
+  });
+
+  const out = withDom(dom, () => pageProbe(SELECTORS.engineer, 'ORCHESTRATOR-REPORT'));
+  assert.equal(out.via, 'selector', 'selectors bound the reply to one turn; prefer them');
+  assert.equal(out.lastText, 'the precise reply');
+});
+
+test('pageProbe reports page size so BLINDNESS is distinguishable from an EMPTY page', async () => {
+  const { pageProbe } = await import('../src/transports/dom.js');
+
+  const full = withDom(
+    fakeDom({ html: { '[data-testid="composer"]': ['x'] }, bodyText: 'y'.repeat(40_000) }),
+    () => pageProbe(SELECTORS.engineer, 'ORCHESTRATOR-REPORT'));
+  const empty = withDom(
+    fakeDom({ html: { '[data-testid="composer"]': ['x'] }, bodyText: '' }),
+    () => pageProbe(SELECTORS.engineer, 'ORCHESTRATOR-REPORT'));
+
+  assert.equal(full.pageChars, 40_000);
+  assert.equal(empty.pageChars, 0);
+  assert.equal(full.via, 'none', 'text we cannot parse is not a reply');
+  assert.equal(full.lastText, '', 'raw page text must NEVER be returned as the reply');
+});
+
+test('A PAGE FULL OF UNREADABLE TEXT BLAMES OUR SELECTORS, NOT THE MODEL', async () => {
+  /*
+   * The user-facing half. The message a human reads must name the actual
+   * fault. "produced no reply" sent the user looking at Arena; the page had
+   * 113,671 elements on it.
+   */
+  const blind = fakePage([{ composer: true, busy: undefined, turns: 0, lastText: '', pageChars: 45_000 }]);
+  const t = new DomTransport({ page: blind.page, now: blind.now, wait: blind.wait });
+  const err = await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 })
+    .then(() => null, (e) => e);
+
+  assert.equal(err.detail.phase, 'selector-miss');
+  assert.match(err.message, /45000 characters of text on screen/);
+  assert.match(err.message, /do not match this page/);
+  assert.equal(err.detail.pageChars, 45_000);
+});
+
+test('a genuinely BLANK page is reported as blank, not as a selector bug', async () => {
+  /*
+   * The counterweight: if everything were called a selector miss, the message
+   * would be wrong half the time and would stop being believed.
+   */
+  const blank = fakePage([{ composer: true, busy: undefined, turns: 0, lastText: '', pageChars: 0 }]);
+  const t = new DomTransport({ page: blank.page, now: blank.now, wait: blank.wait });
+  const err = await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 })
+    .then(() => null, (e) => e);
+
+  assert.equal(err.detail.phase, 'no-content', 'an empty page is a different fault');
+  assert.doesNotMatch(err.message, /do not match this page/);
 });

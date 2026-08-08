@@ -43,6 +43,16 @@
  * better than class names, which are usually generated; text-matching is last
  * because it breaks on localisation.
  */
+/*
+ * The one thing imported from the core: the fence marker.
+ *
+ * This direction is legal and checked -- transports may import core, never the
+ * reverse. Sharing the constant is the point: the parser looks for exactly the
+ * string the prompt asked for, and a copy here would drift from `protocol.js`
+ * on the first change and fail silently.
+ */
+import { REPORT_FENCE } from '../core/protocol.js';
+
 export const SELECTORS = {
   manager: {
     composer: ['#prompt-textarea', 'div[contenteditable="true"][id="prompt-textarea"]', 'textarea[data-id]', 'form textarea'],
@@ -253,10 +263,29 @@ export class DomTransport {
        * outer deadline rather than being masked by it.
        */
       if (!sawAnything && this.now() >= firstTurnBy) {
+        /*
+         * `pageChars` decides which failure this is, and they need different
+         * words because they need different actions from the user.
+         *
+         *   a page full of text we cannot parse -> OUR selectors are wrong
+         *   a genuinely blank page              -> the tab is wrong or broken
+         *
+         * Before this, both produced "produced no reply", which pointed the
+         * user at the model in both cases -- wrong in the first and the more
+         * common of the two.
+         */
+        const blind = s.pageChars > 2_000;
         throw new TransportError('failed',
-          `${surface} showed no turns, no text and no activity ${Math.round(this.config.firstTurnMs / 1000)}s after submitting — ` +
-          `the reply may be on screen but unreadable: none of the ${surface} "turns" selectors matched`,
-          { phase: 'selector-miss', tried: SELECTORS[surface]?.turns, sawBusy: false });
+          blind
+            ? `${surface} has ${s.pageChars} characters of text on screen but none of them are readable as a reply — ` +
+              `the "turns" selectors do not match this page, and no ${REPORT_FENCE} block was found in the page text`
+            : `${surface} showed no turns, no text and no activity ${Math.round(this.config.firstTurnMs / 1000)}s after submitting`,
+          {
+            phase: blind ? 'selector-miss' : 'no-content',
+            tried: SELECTORS[surface]?.turns,
+            pageChars: s.pageChars,
+            sawBusy: false,
+          });
       }
 
       return s.turns > baseTurns || (s.lastText && s.lastText !== baseText);
@@ -404,6 +433,10 @@ export class DomTransport {
       busyKnown: typeof raw?.busy === 'boolean',
       turns: Number(raw?.turns ?? 0),
       lastText: String(raw?.lastText ?? ''),
+      /** 'selector' | 'fence' | 'none' — how the reply text was located. */
+      via: raw?.via ?? 'selector',
+      /** Total visible page text. Life we can see without matching a selector. */
+      pageChars: Number(raw?.pageChars ?? 0),
     };
   }
 
@@ -429,7 +462,16 @@ export class DomTransport {
  * documented mutations (setting the value and dispatching input). Everything
  * else observes.
  */
-export function pageProbe(selectors) {
+export function pageProbe(selectors, fence = 'ORCHESTRATOR-REPORT') {
+  /*
+   * `fence` is a PARAMETER, not a module import.
+   *
+   * This function is serialised by `chrome.scripting.executeScript` and
+   * re-evaluated inside the page, which destroys its closure -- a module-level
+   * constant referenced here is `undefined` at runtime, in the page, where no
+   * test would see it. Everything this function needs must arrive as an
+   * argument. The default keeps it callable in isolation.
+   */
   const pick = (list) => {
     for (const sel of list || []) {
       const el = document.querySelector(sel);
@@ -444,11 +486,49 @@ export function pageProbe(selectors) {
   const turns = selectors.turns.reduce((n, sel) => Math.max(n, document.querySelectorAll(sel).length), 0);
 
   let lastText = '';
+  let via = 'selector';
   for (const sel of selectors.turns) {
     const all = document.querySelectorAll(sel);
     if (all.length) {
       lastText = (all[all.length - 1].innerText || '').trim();
       break;
+    }
+  }
+
+  /*
+   * FALLBACK: FIND THE REPORT BY ITS CONTENT, NOT BY ITS CONTAINER.
+   *
+   * Every `turns` selector is a guess about someone else's markup, and on
+   * Arena on 2026-08-08 every guess was wrong -- the reply was on screen and
+   * we read nothing. Chasing the right selector is a game we lose again on the
+   * next redesign.
+   *
+   * But we are not looking for "the assistant's message". We are looking for
+   * OUR OWN FENCE, a string we told the engineer to emit and which does not
+   * occur by chance. That marker is independent of class names, testids and
+   * DOM shape, so it survives redesigns that break every selector.
+   *
+   * Only consulted when the selectors found nothing: when they work they are
+   * more precise, because they bound the reply to one turn rather than to the
+   * whole page.
+   */
+  if (!lastText) {
+    const body = (document.body?.innerText || '').trim();
+    const at = body.lastIndexOf('```' + fence);
+    if (at !== -1) {
+      lastText = body.slice(at);
+      via = 'fence';
+    } else if (body) {
+      /*
+       * Last resort, and deliberately NOT used as reply text.
+       *
+       * Page text is reported so the transport can tell "a page we cannot read"
+       * from "a page that is genuinely still empty" -- the liveness signal that
+       * decides between waiting hours and failing in 90 seconds. It is not
+       * returned as `lastText`, because handing the whole page to the parser
+       * would let sidebar chrome be parsed as an engineering report.
+       */
+      via = 'none';
     }
   }
 
@@ -474,6 +554,19 @@ export function pageProbe(selectors) {
     busy,
     turns,
     lastText,
+    /*
+     * How the text was found. Surfaced so a run that is limping along on the
+     * fence fallback says so in the log instead of looking healthy -- a silent
+     * fallback is a broken selector nobody ever fixes.
+     */
+    via,
+    /*
+     * Page text length: evidence of life that does not depend on any selector.
+     * `turns: 0, lastText: '', pageChars: 40000` is unambiguous -- the page is
+     * full of content we cannot parse. That is our bug, and the transport can
+     * now say so rather than blaming the model for silence.
+     */
+    pageChars: (document.body?.innerText || '').length,
     url: location.href,
     title: document.title,
   };
