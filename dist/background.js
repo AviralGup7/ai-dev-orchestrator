@@ -55,7 +55,7 @@ import { bind, verify } from './core/environment.js';
 import { analyse } from './core/analytics.js';
 import { replay, narrate } from './core/replay.js';
 import { scanTab } from './scan.js';
-import { ScanBudget, boundCapture, describeCapture, diffCaptures, renderCapture } from './core/surface.js';
+import { ScanBudget, boundCapture, classifySignals, describeCapture, diffCaptures, renderCapture } from './core/surface.js';
 
 /**
  * Never let an error about an error hide the real one.
@@ -284,6 +284,34 @@ async function maybeScan(event) {
         becauseOf: event.type,
       },
     });
+
+    /*
+     * ACT ON WHAT THE PAGE SAID.
+     *
+     * The scanner has always FOUND "you have reached your usage limit" and
+     * nothing consumed it: the failure was classified as generic, the recovery
+     * ladder retried, and each retry spent more of the quota that had just run
+     * out -- while telling the user the extension was broken.
+     *
+     * A rate limit is a reason to WAIT, not to retry and not to fail. Pausing
+     * keeps the run resumable: the user comes back when the quota resets and
+     * presses Resume, instead of finding a dead run and starting over.
+     */
+    const verdict = classifySignals(bounded.capture);
+    if (verdict.kind && running) {
+      logger.log('error', {
+        source: 'extension',
+        status: 'warning',
+        description: `${surface}: ${verdict.why}`,
+        correlationId: event.id,
+        data: { kind: verdict.kind, evidence: verdict.evidence, retry: verdict.retry },
+      });
+      orch?.pause?.();
+      notify(
+        verdict.kind === 'rate-limited' ? 'Paused — usage limit reached' : 'Paused — sign-in needed',
+        `${verdict.why}. The run is paused and can be resumed.`,
+      );
+    }
   } catch (err) {
     /*
      * A failed scan is logged as `surface-scan-failed`, which is in NEVER_SCAN

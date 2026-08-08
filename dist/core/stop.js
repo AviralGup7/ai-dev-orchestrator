@@ -32,6 +32,20 @@ export const DEFAULTS = {
   /** Minimum overall movement that counts as progress. */
   progressEpsilon: 2,
   /**
+   * A drop of this many points across the review window is a REGRESSION, not
+   * a plateau, and is reported as such.
+   *
+   * Deliberately not derived from `progressEpsilon`. That answers "is this
+   * progress?"; this answers "is this damage?". Sharing one number would mean
+   * every run too flat to continue was also announced as broken, and a
+   * warning that fires on ordinary stagnation stops being read.
+   *
+   * 5 points is above scoring noise -- a single dimension moving one bucket
+   * shifts the overall by roughly a point -- and well below the collapses
+   * this exists to catch (the demonstrated case was 41 points).
+   */
+  regressionDrop: 5,
+  /**
    * Dimensions that MUST be measured or inferred -- never asserted -- before
    * a run may stop as complete.
    *
@@ -211,6 +225,37 @@ export function shouldStop(memory, config = {}) {
     const last = span[span.length - 1].overall;
     if (Number.isFinite(first) && Number.isFinite(last)) {
       const delta = last - first;
+
+      /*
+       * A COLLAPSE IS NOT A PLATEAU. CHECKED FIRST, DELIBERATELY.
+       *
+       * This compared `delta < epsilon` unsigned, so a project that fell from
+       * 82% to 41% produced:
+       *
+       *   reason: 'no-progress'
+       *   why:    "only -41.0 points across 3 strategic reviews"
+       *
+       * -- the same verdict as a run that had not moved at all, distinguished
+       * only by a minus sign buried after the word "only". The two demand
+       * opposite responses from the user: a plateau means try a different
+       * objective, a collapse means revert. Giving the wrong one at the exact
+       * moment the run ends is worse than giving none, because they act on it.
+       *
+       * `regressionDrop` is a separate threshold from `progressEpsilon`. They
+       * answer different questions -- "is this progress?" and "is this
+       * damage?" -- and tying them together would mean any run too flat to
+       * continue was also reported as broken.
+       */
+      if (delta <= -cfg.regressionDrop) {
+        return {
+          stop: true,
+          reason: 'regression',
+          why: `the project got measurably worse: ${first.toFixed(0)}% → ${last.toFixed(0)}% `
+            + `(${delta.toFixed(1)} points) across ${cfg.noProgressReviews} strategic reviews. `
+            + 'Consider reverting to the last good commit rather than continuing.',
+        };
+      }
+
       if (delta < cfg.progressEpsilon) {
         return {
           stop: true,

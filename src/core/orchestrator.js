@@ -36,6 +36,16 @@ import { recordSkip } from './controls.js';
 import { getMode } from './modes.js';
 
 /**
+ * How many failed attempts to carry into the manager's prompt.
+ *
+ * Bounded because this text goes into a prompt. Context overflow is the
+ * top published failure mode for long agent runs, and an unbounded failure
+ * list is exactly the sort of thing that grows without anyone noticing.
+ * The most recent failures are the informative ones.
+ */
+const MAX_FAILED_ATTEMPTS = 10;
+
+/**
  * The fixed objective for iteration 1, by mode.
  *
  * Written here rather than asked of the manager: the answer is known, and
@@ -528,6 +538,61 @@ export class Orchestrator {
     record.filesChanged = result.filesChanged || [];
     record.linesChanged = result.linesChanged ?? null;
     record.summary = result.summary || '';
+
+    /*
+     * RECORD WHAT DID NOT WORK.
+     *
+     * `failedAttempts` was declared in types.js, passed to the manager in
+     * phasePlan, and WRITTEN BY NOTHING -- for the whole life of the project.
+     * The loop therefore could not learn from a failure: the manager received
+     * an empty list every time and would happily re-propose the objective that
+     * had just failed, which is precisely the circling this product claims to
+     * detect.
+     *
+     * Recorded only when the engineer's own numbers say it failed:
+     *   taskStatus  blocked/failed  -- it said so
+     *   outcome     'partial'       -- the report contradicted itself, so the
+     *                                  adapter downgraded it
+     * A `complete` report with no contradictions is not an attempt worth
+     * warning about, and logging every iteration here would bury the real
+     * failures in noise.
+     */
+    const failed = result.outcome === 'partial'
+      || result.taskStatus === 'blocked'
+      || result.taskStatus === 'failed';
+
+    if (failed) {
+      this.memory.failedAttempts.push({
+        iteration: record.n,
+        objective: this.memory.objective?.text ?? '',
+        taskStatus: result.taskStatus ?? 'unknown',
+        /*
+         * WHY it failed, in the engineer's own words where possible. The
+         * manager needs the reason, not just the fact -- "blocked: no network
+         * access" and "failed: the refactor broke 40 tests" call for very
+         * different next objectives.
+         */
+        why: result.contradictions?.find((c) => c.severity === 'error')?.message
+          || result.knownIssues?.[0]
+          || result.summary
+          || 'no reason given',
+        at: Date.now(),
+      });
+      /*
+       * Bounded. This goes into a prompt, and an unbounded list would grow
+       * until it crowded out the objective itself -- context overflow is the
+       * top published failure mode for long agent runs.
+       */
+      if (this.memory.failedAttempts.length > MAX_FAILED_ATTEMPTS) {
+        this.memory.failedAttempts = this.memory.failedAttempts.slice(-MAX_FAILED_ATTEMPTS);
+      }
+      record.failed = true;
+      this.emit('attempt-failed', {
+        iteration: record.n,
+        taskStatus: result.taskStatus ?? 'unknown',
+        why: this.memory.failedAttempts[this.memory.failedAttempts.length - 1].why,
+      });
+    }
 
     await this.save();
     this.emit('executed', {

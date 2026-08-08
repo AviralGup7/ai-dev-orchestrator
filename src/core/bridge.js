@@ -45,6 +45,7 @@ const MAP = {
   reviewed: 'review-complete',
   'strategy-changed': 'strategy-changed',
   'stagnation-detected': 'stagnation-detected',
+  'attempt-failed': 'attempt-failed',
   'environment-drift': 'environment-drift',
   'environment-unblocked': 'workflow-resumed',
   'workflow-paused': 'workflow-paused',
@@ -80,7 +81,7 @@ const MAP = {
 /** Which engine events are failures. Everything else defaults to success. */
 const ERRORS = new Set(['iteration-failed', 'environment-drift', 'run-blocked', 'run-failed', 'recovery-failed']);
 const WARNINGS = new Set([
-  'stagnation-detected', 'step-skipped', 'step-retried', 'phase-skipped',
+  'stagnation-detected', 'attempt-failed', 'step-skipped', 'step-retried', 'phase-skipped',
   'recovery-attempt', 'run-retrying',
 ]);
 
@@ -125,6 +126,8 @@ function describeLogEvent(type, e) {
       return `New direction: ${e.direction}`;
     case 'stagnation-detected':
       return `Loop signals: ${(e.signals || []).map((s) => s.kind ?? s).join(', ')}`;
+    case 'attempt-failed':
+      return `Recorded as a failed attempt (${e.taskStatus}): ${e.why}`;
     case 'environment-drift':
       return e.detail || 'The environment no longer matches what was bound';
     case 'step-retried':

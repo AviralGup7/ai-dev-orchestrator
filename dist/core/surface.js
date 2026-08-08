@@ -307,6 +307,77 @@ export function renderCapture(c) {
  * button became disabled and a rate-limit banner appeared" is a diagnosis,
  * whereas two full captures are two haystacks the reader must compare by eye.
  */
+/**
+ * Phrases that mean "the account is throttled", not "the extension is broken".
+ *
+ * Concepts, not exact wording -- matching a provider's precise sentence would
+ * rot the moment they reword it.
+ */
+const RATE_LIMITED = [
+  'rate limit', 'usage limit', 'too many requests', 'out of credits',
+  'upgrade to', 'quota', 'you have reached', "you've reached",
+  'limit reached', 'try again later',
+];
+
+/** Phrases that mean the session is gone -- a different remedy entirely. */
+const SIGNED_OUT = ['sign in', 'log in', 'session expired', 'verify you are human'];
+
+/**
+ * CLASSIFY WHAT THE PAGE IS SAYING.
+ *
+ * The scanner has always collected these sentences and nothing ever acted on
+ * them: a rate limit was reported as a generic failure, so the recovery ladder
+ * retried -- burning the little quota that remained -- and the user was told
+ * the extension had failed when in fact their account was throttled.
+ *
+ * The distinction that matters is WAITING vs FIXING. A rate limit resolves by
+ * itself given time; a broken selector never does. Retrying the first is
+ * harmful and retrying the second is pointless, so they must not share a
+ * verdict.
+ *
+ * @param {{signals?: string[]}} capture
+ * @returns {{kind: 'rate-limited'|'signed-out'|null, why: string, retry: boolean, evidence: string|null}}
+ */
+export function classifySignals(capture) {
+  const signals = capture?.signals || [];
+  const hay = signals.map((s) => String(s).toLowerCase());
+
+  const hit = (needles) => {
+    for (let i = 0; i < hay.length; i++) {
+      for (const n of needles) if (hay[i].includes(n)) return signals[i];
+    }
+    return null;
+  };
+
+  /*
+   * Rate limiting is checked FIRST. A throttled page very often also shows a
+   * sign-in prompt in its chrome, and telling the user to re-authenticate when
+   * the real problem is quota sends them somewhere that cannot help.
+   */
+  const limited = hit(RATE_LIMITED);
+  if (limited) {
+    return {
+      kind: 'rate-limited',
+      why: 'the page says the account has hit a usage limit — this is not an extension fault, '
+        + 'and retrying now would spend what is left of the quota',
+      retry: false,
+      evidence: String(limited).slice(0, 200),
+    };
+  }
+
+  const out = hit(SIGNED_OUT);
+  if (out) {
+    return {
+      kind: 'signed-out',
+      why: 'the page is asking you to sign in or prove you are human — the run cannot proceed until you do',
+      retry: false,
+      evidence: String(out).slice(0, 200),
+    };
+  }
+
+  return { kind: null, why: '', retry: true, evidence: null };
+}
+
 export function diffCaptures(before, after) {
   if (!before || !after) return null;
   /*

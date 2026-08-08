@@ -115,6 +115,7 @@ export const EVENT_TYPES = /** @type {const} */ ({
   'review-complete': { channel: 'ai', source: 'deepseek', label: 'DeepSeek recommendation received', phase: 'review' },
   'strategy-changed': { channel: 'ai', source: 'deepseek', label: 'Strategy changed' },
   'stagnation-detected': { channel: 'ai', source: 'extension', label: 'Loop detected' },
+  'attempt-failed': { channel: 'ai', source: 'extension', label: 'Attempt failed' },
 
   /* -- iteration -------------------------------------------------------- */
   'iteration-started': { channel: 'lifecycle', source: 'extension', label: 'Iteration started' },

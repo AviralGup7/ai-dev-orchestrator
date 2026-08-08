@@ -17,8 +17,7 @@ import { readFileSync } from 'node:fs';
 
 import {
   ScanBudget, boundCapture, renderCapture, diffCaptures, describeCapture,
-  SCAN_WORTHY, NEVER_SCAN, SCAN_DEFAULTS,
-} from '../src/core/surface.js';
+  SCAN_WORTHY, NEVER_SCAN, SCAN_DEFAULTS, classifySignals } from '../src/core/surface.js';
 import { Journal } from '../src/core/journal.js';
 import { makeEvent } from '../src/core/events.js';
 
@@ -445,4 +444,54 @@ test('the capture reports whether the shipped selectors matched', async () => {
   const scanSrc = readFileSync(new URL('../extension/scan.js', import.meta.url), 'utf8');
   assert.match(scanSrc, /selectorCheck/);
   assert.match(scanSrc, /composer: selectors\.composer\.map/);
+});
+
+/* ---------------------------------------------------------------------------
+ * ACTING ON WHAT THE PAGE SAYS
+ *
+ * The scanner has always collected "You've reached your usage limit" and
+ * nothing consumed it. The failure was classified as generic, so the recovery
+ * ladder retried — spending the little quota that remained — and the user was
+ * told the extension had failed when their account was simply throttled.
+ * ------------------------------------------------------------------------ */
+
+test('A USAGE LIMIT IS CLASSIFIED AS A REASON TO WAIT, NOT TO RETRY', () => {
+  const v = classifySignals({ signals: ["…you've reached your usage limit for GPT-5. Try again after 3pm…"] });
+
+  assert.equal(v.kind, 'rate-limited');
+  assert.equal(v.retry, false,
+    'retrying a rate limit spends the quota that just ran out — the opposite of helping');
+  assert.match(v.why, /not an extension fault/,
+    'the user must not be sent to debug the extension over an account limit');
+  assert.ok(v.evidence, 'the page text that triggered this must be quoted back');
+});
+
+test('a healthy page produces no verdict and stays retryable', () => {
+  const v = classifySignals({ signals: ['New chat', 'Send a message'] });
+  assert.equal(v.kind, null, 'ordinary page furniture must not be read as a fault');
+  assert.equal(v.retry, true);
+});
+
+test('RATE LIMITING BEATS SIGN-IN when both appear', () => {
+  /*
+   * A throttled page very often also shows a "Log in" link in its chrome.
+   * Diagnosing sign-in sends the user to re-authenticate, which cannot fix a
+   * quota problem — so ordering here is load-bearing, not cosmetic.
+   */
+  const v = classifySignals({ signals: ['Log in', '…you have reached your usage limit…'] });
+  assert.equal(v.kind, 'rate-limited',
+    'the quota message is the actionable one; the sign-in link is furniture');
+});
+
+test('a real sign-out is still detected', () => {
+  const v = classifySignals({ signals: ['Your session expired. Please sign in again.'] });
+  assert.equal(v.kind, 'signed-out');
+  assert.equal(v.retry, false);
+});
+
+test('classification survives missing and malformed input', () => {
+  for (const input of [undefined, null, {}, { signals: null }, { signals: [] }]) {
+    const v = classifySignals(input);
+    assert.equal(v.kind, null, `${JSON.stringify(input)} must not throw or produce a verdict`);
+  }
 });

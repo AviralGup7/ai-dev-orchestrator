@@ -181,6 +181,28 @@ export function metadataBlock(memory, { maxIssues = 8, maxDecisions = 3 } = {}) 
     }
   }
 
+  /*
+   * WHAT HAS ALREADY BEEN TRIED AND FAILED.
+   *
+   * Placed immediately after known issues and before strategy history,
+   * because it is the single most decision-relevant fact the manager can
+   * have: an objective that already failed once should not be proposed again
+   * without a stated change of approach.
+   *
+   * This block never rendered before -- `failedAttempts` was collected
+   * nowhere and printed nowhere, so every plan was made as if no attempt had
+   * ever failed.
+   */
+  if (memory.failedAttempts?.length) {
+    lines.push(`- Already tried and FAILED (${memory.failedAttempts.length}) — do not simply repeat these:`);
+    for (const f of memory.failedAttempts.slice(-maxIssues)) {
+      const what = clip(f.objective || 'an unnamed objective', 140);
+      lines.push(`  - iteration ${f.iteration} (${f.taskStatus}): ${what}`);
+      if (f.why) lines.push(`    why it failed: ${clip(f.why, 160)}`);
+    }
+    lines.push('  If you propose something similar, say explicitly what is different this time.');
+  }
+
   const strategies = (memory.decisions || []).filter((d) => d.kind === 'strategy');
   if (strategies.length) {
     lines.push('- Strategy changes so far:');

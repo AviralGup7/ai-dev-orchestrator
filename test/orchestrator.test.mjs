@@ -383,3 +383,104 @@ test('the manager receives the context it needs to plan', async () => {
   }
   assert.equal(seen.scope, 'the scope');
 });
+
+/* ---------------------------------------------------------------------------
+ * failedAttempts — the field that was declared, plumbed, and never written.
+ *
+ * `types.js:196` declared it, `phasePlan` passed it to the manager, and NO
+ * code anywhere assigned to it. The manager therefore received an empty list
+ * on every iteration and could re-propose the objective that had just failed
+ * — the exact circling this product exists to detect.
+ * ------------------------------------------------------------------------ */
+
+test('A FAILED ITERATION IS RECORDED SO THE MANAGER CAN SEE IT', async () => {
+  const seen = [];
+  const { o } = build({
+    objectives: [
+      { text: 'migrate the database' },
+      (ctx) => { seen.push(ctx); return { text: 'something else' }; },
+    ],
+    results: [
+      // The engineer says outright that it could not do it.
+      { taskStatus: 'blocked', outcome: 'partial', evidence: [], filesChanged: [],
+        summary: 'no database credentials', knownIssues: ['no credentials in the environment'] },
+      { evidence: [passing(5)], filesChanged: ['a.js'], summary: 'ok' },
+    ],
+    evaluations: [{ scores: flatScores(40) }],
+  });
+  await o.load('a project');
+  await o.iterate();
+
+  const mem = o.memory;
+  assert.equal(mem.failedAttempts.length, 1, 'the failure must be recorded at all');
+  const f = mem.failedAttempts[0];
+  assert.equal(f.iteration, 1);
+  assert.equal(f.taskStatus, 'blocked');
+  assert.equal(f.objective, 'migrate the database', 'WHAT failed must be recorded');
+  assert.match(f.why, /credentials/, 'WHY it failed must be recorded, not just that it did');
+
+  // And the manager must actually receive it on the next plan.
+  await o.iterate();
+  assert.ok(seen.length, 'the manager should have been asked to plan again');
+  assert.equal(seen[0].failedAttempts.length, 1,
+    'the manager must be told what already failed, or it will propose it again');
+  assert.equal(seen[0].failedAttempts[0].objective, 'migrate the database');
+});
+
+test('a SUCCESSFUL iteration is not recorded as a failed attempt', async () => {
+  /*
+   * The counterweight. If every iteration were logged here the list would be
+   * noise, the prompt would fill with successes labelled as failures, and the
+   * manager would be actively misled.
+   */
+  const { o } = build({
+    objectives: [{ text: 'add tests' }],
+    results: [{ taskStatus: 'complete', evidence: [passing(10)], filesChanged: ['t.js'], summary: 'done' }],
+    evaluations: [{ scores: flatScores(50) }],
+  });
+  await o.load('a project');
+  await o.iterate();
+  assert.equal(o.memory.failedAttempts.length, 0, 'success is not a failed attempt');
+});
+
+test('a report that CONTRADICTS ITS OWN NUMBERS counts as a failed attempt', async () => {
+  /*
+   * `taskStatus: 'complete'` while the adapter downgraded the outcome to
+   * 'partial' means the engineer claimed success its own evidence did not
+   * support. That is the most important kind of failure to remember, because
+   * it is the one the prose hides.
+   */
+  const { o } = build({
+    objectives: [{ text: 'fix the parser' }],
+    results: [{ taskStatus: 'complete', outcome: 'partial', evidence: [], filesChanged: [],
+      summary: 'all good', contradictions: [{ severity: 'error', message: 'claimed complete with 3 failing tests' }] }],
+    evaluations: [{ scores: flatScores(40) }],
+  });
+  await o.load('a project');
+  await o.iterate();
+
+  assert.equal(o.memory.failedAttempts.length, 1);
+  assert.match(o.memory.failedAttempts[0].why, /3 failing tests/,
+    'the contradiction is the most informative reason available');
+});
+
+test('the failed-attempt list is bounded so it cannot eat the prompt', async () => {
+  /*
+   * This text goes into a prompt. Context overflow is the top published
+   * failure mode for long agent runs, so an unbounded list is a real hazard,
+   * not a theoretical one.
+   */
+  const { o } = build({
+    objectives: [{ text: 'try again' }],
+    results: [{ taskStatus: 'failed', outcome: 'partial', evidence: [], filesChanged: [], summary: 'nope' }],
+    evaluations: [{ scores: flatScores(40) }],
+    config: { maxIterations: 40 },
+  });
+  await o.load('a project');
+  for (let i = 0; i < 15; i++) await o.iterate();
+
+  assert.ok(o.memory.failedAttempts.length <= 10,
+    `expected the list to be capped, got ${o.memory.failedAttempts.length}`);
+  assert.equal(o.memory.failedAttempts[o.memory.failedAttempts.length - 1].iteration, 15,
+    'the cap must drop the OLDEST entries, keeping the most recent');
+});
