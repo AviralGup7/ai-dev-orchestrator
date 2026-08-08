@@ -31,6 +31,8 @@ import { composeFirstPrompt } from './core/protocol.js';
 import { initialScope, validateSetup } from './core/modes.js';
 import { emptyMemory } from './core/types.js';
 import { snapshotEnvironment, EXPECTED_HOSTS } from './probe.js';
+import { scanTab } from './scan.js';
+import { ScanBudget, boundCapture, describeCapture, diffCaptures, renderCapture } from './core/surface.js';
 
 /**
  * Never let an error about an error hide the real one.
@@ -47,7 +49,30 @@ const reason = (err) => String(err?.message || err || 'unknown error');
 
 const sink = new IdbLogSink();
 const store = new ChromeStore();
-const logger = new Logger({ sink, liveLimit: 500, onEvent: broadcast });
+const budget = new ScanBudget();
+/** Last capture per surface, so a repeat failure can be logged as a diff. */
+const lastCapture = new Map();
+
+const logger = new Logger({
+  sink,
+  liveLimit: 500,
+  onEvent: (event) => {
+    broadcast();
+    /*
+     * THE AUTOMATIC TRIGGER.
+     *
+     * Every logged event passes through here, so an error captures the page
+     * that produced it without any call site remembering to ask. That matters
+     * because the call sites that log errors are the ones written in a hurry.
+     *
+     * Fired and NOT awaited: `log()` is synchronous by design (an awaited log
+     * lets a slow write reorder events relative to the actions they describe),
+     * and a scan takes hundreds of milliseconds. The scan logs its own result
+     * when it completes.
+     */
+    void maybeScan(event);
+  },
+});
 
 let orch = null;
 let startedAt = null;
@@ -86,6 +111,82 @@ async function rehydrate() {
   }
 }
 
+/**
+ * Capture the page behind an error, if that is warranted.
+ *
+ * All the "is this warranted" judgement is in `ScanBudget`. This function only
+ * resolves which tab to look at and records the result.
+ */
+async function maybeScan(event) {
+  const verdict = budget.may(event);
+  if (!verdict.allowed) return;
+
+  const surface = event.surface || event.data?.surface || event.source;
+  let tabId = event.data?.tabId ?? orch?.environment?.binding?.surfaces?.[surface]?.tabId;
+
+  if (!tabId) {
+    /*
+     * Fall back to a fresh probe rather than giving up.
+     *
+     * The most valuable moment to scan is a failure that happened BEFORE a
+     * binding existed -- a preflight that could not find the composer, say.
+     * Requiring a binding would disable the feature exactly when the user has
+     * the least information.
+     */
+    try {
+      const snap = await snapshotEnvironment();
+      tabId = snap.surfaces?.[surface]?.tabId;
+    } catch { /* probe failed; nothing to scan */ }
+  }
+  if (!tabId) return;
+
+  budget.begin(surface);
+  try {
+    const raw = await scanTab(tabId, { maxNodes: budget.config.maxNodes, maxDepth: budget.config.maxDepth });
+    const bounded = boundCapture({ ...raw, surface }, budget.config);
+    if (!bounded.ok) throw new Error(bounded.problem);
+
+    const previous = lastCapture.get(surface);
+    const diff = previous ? diffCaptures(previous, bounded.capture) : null;
+    lastCapture.set(surface, bounded.capture);
+
+    logger.log('surface-scan', {
+      source: 'extension',
+      status: 'warning',
+      iteration: event.iteration ?? null,
+      description: describeCapture(bounded.capture),
+      correlationId: event.id,
+      /*
+       * Both shapes are stored: the structured capture, because a later tool
+       * (or a diff against the next failure) needs the fields; and the
+       * rendered markdown, because the log export is meant to be pasted to an
+       * agent and re-rendering it at read time would mean every consumer needs
+       * the renderer.
+       */
+      data: {
+        capture: bounded.capture,
+        markdown: renderCapture(bounded.capture),
+        diff,
+        becauseOf: event.type,
+      },
+    });
+  } catch (err) {
+    /*
+     * A failed scan is logged as `surface-scan-failed`, which is in NEVER_SCAN
+     * -- otherwise this line would trigger the scan that produced it, forever.
+     */
+    logger.log('surface-scan-failed', {
+      source: 'extension',
+      status: 'warning',
+      description: `Could not capture ${surface}: ${reason(err)}`,
+      correlationId: event.id,
+      data: { remedy: 'The page may have closed, or the extension may lack access to it.' },
+    });
+  } finally {
+    budget.end();
+  }
+}
+
 function snapshot() {
   return {
     memory: orch?.memory ?? null,
@@ -97,6 +198,7 @@ function snapshot() {
     sinkFailures: logger.sinkFailures,
     startedAt,
     running,
+    scans: budget.summary(),
   };
 }
 

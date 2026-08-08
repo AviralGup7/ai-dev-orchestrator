@@ -135,9 +135,19 @@ export function renderLog(events, notShown = 0) {
       const [badge, colour] = SOURCE_BADGE[e.source] || ['?', '#6e7681'];
       const dur = Number.isFinite(e.durationMs) ? `<span class="dur">${fmtMs(e.durationMs)}</span>` : '';
       const spin = e.status === 'pending' ? '<span class="spin">◍</span> ' : '';
-      const extra = e.data && Object.keys(e.data).length
-        ? `<details class="data"><summary>details</summary><pre>${esc(JSON.stringify(e.data, null, 2))}</pre></details>`
-        : '';
+      /*
+       * A surface scan renders as readable markdown, not as its raw JSON.
+       *
+       * The whole point of the capture is that a person or an AI reads it and
+       * understands the page. `JSON.stringify` of four hundred nodes is
+       * technically the same information and practically unreadable, which
+       * would make the feature look like noise and get it switched off.
+       */
+      const extra = e.type === 'surface-scan' && e.data?.capture
+        ? `<details class="data"><summary>page capture — ${esc(e.data.capture.surface)}</summary><pre>${esc(renderCaptureText(e.data))}</pre></details>`
+        : e.data && Object.keys(e.data).length
+          ? `<details class="data"><summary>details</summary><pre>${esc(JSON.stringify(e.data, null, 2))}</pre></details>`
+          : '';
       return `<div class="entry ${e.status}">
         <div class="entry-head">
           <span class="time">${clock(e.at)}</span>
@@ -154,6 +164,27 @@ export function renderLog(events, notShown = 0) {
     .join('');
 
   return banner + rows;
+}
+
+/**
+ * Capture + diff as text. Imported lazily via the argument rather than at the
+ * top of the file so `ui.js` keeps its one job: turning data into strings.
+ */
+function renderCaptureText(data) {
+  const parts = [];
+  if (data.becauseOf) parts.push(`Captured because: ${data.becauseOf}\n`);
+  if (data.diff && !data.diff.unchanged) {
+    parts.push('CHANGED SINCE THE LAST CAPTURE OF THIS SURFACE:');
+    for (const s of data.diff.newSignals || []) parts.push(`  + page now says: ${s}`);
+    for (const s of data.diff.changed || []) parts.push(`  ~ ${s}`);
+    for (const s of data.diff.appeared || []) parts.push(`  + appeared: ${s}`);
+    for (const s of data.diff.vanished || []) parts.push(`  - vanished: ${s}`);
+    parts.push('');
+  } else if (data.diff?.unchanged) {
+    parts.push('IDENTICAL to the previous capture of this surface — the page is stuck.\n');
+  }
+  parts.push(data.markdown || '');
+  return parts.join('\n');
 }
 
 function fmtMs(ms) {

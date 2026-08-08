@@ -166,6 +166,44 @@ export class Journal {
       L.push('');
     }
 
+    /* ---- page captures ------------------------------------------------ */
+
+    /*
+     * Captures come before the timeline for the same reason environment
+     * problems do: if the run went wrong, this is the section that explains
+     * why, and it is the section a reader pastes to whoever is fixing it.
+     */
+    const scans = this.events.filter((e) => e.type === 'surface-scan' && e.data?.markdown);
+    if (scans.length) {
+      L.push('## Page captures');
+      L.push('');
+      L.push('_Taken automatically when an error was logged, so the state that caused it is preserved._');
+      L.push('');
+      for (const s of scans) {
+        if (s.data.becauseOf) L.push(`**Captured because:** \`${redact(s.data.becauseOf)}\``);
+        if (s.data.diff?.unchanged) {
+          L.push('');
+          L.push('> Identical to the previous capture of this surface — the page is stuck.');
+        } else if (s.data.diff) {
+          const d = s.data.diff;
+          const bits = [
+            ...(d.newSignals || []).map((x) => `page now says: ${x}`),
+            ...(d.changed || []),
+            ...(d.appeared || []).map((x) => `appeared: ${x}`),
+            ...(d.vanished || []).map((x) => `vanished: ${x}`),
+          ];
+          if (bits.length) {
+            L.push('');
+            L.push('**Changed since the last capture:**');
+            for (const b of bits) L.push(`- ${redact(b)}`);
+          }
+        }
+        L.push('');
+        L.push(redact(s.data.markdown));
+        L.push('');
+      }
+    }
+
     /* ---- timeline ---------------------------------------------------- */
     L.push('## Timeline');
     L.push('');

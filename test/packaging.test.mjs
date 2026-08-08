@@ -500,3 +500,116 @@ test('the probe requests no "tabs" permission it does not need', () => {
   const manifest = JSON.parse(readFileSync(new URL('../extension/manifest.template.json', import.meta.url), 'utf8'));
   assert.equal(manifest.permissions.includes('tabs'), false);
 });
+
+/* ========================================================== surface scans */
+
+/** A chrome shim whose executeScript is controllable. */
+function scanShim({ fail = false } = {}) {
+  const base = shim();
+  let injections = 0;
+  globalThis.chrome.tabs = {
+    query: async () => [
+      { id: 11, windowId: 1, active: true, url: 'https://chatgpt.com/c/abc-111', title: 'PM' },
+      { id: 22, windowId: 1, active: false, url: 'https://arena.ai/w/ws-report', title: 'repo' },
+    ],
+  };
+  globalThis.chrome.scripting = {
+    executeScript: async () => {
+      injections++;
+      if (fail) throw new Error('page closed');
+      return [{ result: {
+        at: Date.now(), url: 'https://arena.ai/w/ws-report', title: 'repo',
+        readyState: 'complete', visibility: 'visible',
+        scroll: { x: 0, y: 0 }, viewport: { w: 1440, h: 900 },
+        counts: { elements: 5200, inputs: 2, buttons: 11, iframes: 0 },
+        signals: ['You have reached your usage limit for today.'],
+        nodes: [{ path: 'form > button[send]', tag: 'BUTTON', testid: 'send', label: 'Send', disabled: true, box: { x: 0, y: 0, w: 40, h: 40 } }],
+      } }];
+    },
+  };
+  return { ...base, injections: () => injections };
+}
+
+test('an error in the log automatically captures the page behind it', async () => {
+  const s = scanShim();
+  await loadWorker();
+
+  await ask(s.registered, {
+    kind: 'log', type: 'response-timeout',
+    fields: { status: 'error', source: 'arena', description: 'no response in 300s', data: { surface: 'engineer' } },
+  });
+  await new Promise((r) => setTimeout(r, 150));
+
+  const state = await ask(s.registered, { kind: 'state' });
+  const scan = state.events.find((e) => e.type === 'surface-scan');
+
+  assert.ok(scan, 'a page-level error must capture the page');
+  assert.equal(s.injections(), 1);
+  assert.equal(scan.channel, 'evidence', 'a capture is evidence, not a second error');
+  assert.ok(scan.correlationId, 'the capture links back to the error that caused it');
+  assert.match(scan.data.markdown, /usage limit/, 'and carries what the page said');
+  assert.match(scan.data.markdown, /disabled/);
+});
+
+test('a FAILING scan logs once and does not feed itself', async () => {
+  /*
+   * The trigger is "an error was logged" and a failed scan logs an error.
+   * Without the NEVER_SCAN list plus the reentrancy latch, this test would
+   * not terminate — it would fill the log until the process died.
+   */
+  const s = scanShim({ fail: true });
+  await loadWorker();
+
+  await ask(s.registered, {
+    kind: 'log', type: 'response-timeout',
+    fields: { status: 'error', source: 'arena', description: 'boom', data: { surface: 'engineer' } },
+  });
+  await new Promise((r) => setTimeout(r, 300));
+
+  const state = await ask(s.registered, { kind: 'state' });
+  const failures = state.events.filter((e) => e.type === 'surface-scan-failed');
+  assert.equal(failures.length, 1, `expected exactly one failure entry, got ${failures.length}`);
+  assert.ok(state.events.length < 10, 'the log must not run away');
+});
+
+test('a success never triggers a scan', async () => {
+  const s = scanShim();
+  await loadWorker();
+  await ask(s.registered, { kind: 'log', type: 'response-received', fields: { source: 'arena', data: { surface: 'engineer' } } });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(s.injections(), 0);
+});
+
+test('the scan budget is reported in state, so it cannot look broken silently', async () => {
+  const s = scanShim();
+  await loadWorker();
+  const state = await ask(s.registered, { kind: 'state' });
+  assert.ok(state.scans, 'the panel can show how many scans were taken and why others were not');
+  assert.equal(typeof state.scans.used, 'number');
+});
+
+test('the scripting permission is declared, because scanning uses it', () => {
+  /*
+   * It was stripped one session ago on the grounds that nothing called it.
+   * Something does now. The build re-adds it only when `chrome.scripting`
+   * actually appears in the source, so the manifest cannot drift from the
+   * truth in either direction.
+   */
+  const manifest = JSON.parse(readFileSync(new URL('../extension/manifest.template.json', import.meta.url), 'utf8'));
+  assert.ok(manifest.permissions.includes('scripting'));
+  const scan = readFileSync(new URL('../extension/scan.js', import.meta.url), 'utf8');
+  assert.match(scan, /chrome\.scripting\.executeScript/);
+});
+
+test('the scanner never writes to the page', () => {
+  /*
+   * A diagnostic that perturbs the thing it is diagnosing is worse than none,
+   * and this one runs precisely when something is already wrong.
+   */
+  const scan = readFileSync(new URL('../extension/scan.js', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  for (const forbidden of ['.click(', '.focus(', 'dispatchEvent', '.scrollTo(', '.value =', 'innerHTML =', '.remove()', 'setAttribute(']) {
+    assert.equal(scan.includes(forbidden), false, `the scanner must not call ${forbidden}`);
+  }
+});

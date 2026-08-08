@@ -124,6 +124,13 @@ export const EVENT_TYPES = /** @type {const} */ ({
 
   /* -- trouble ---------------------------------------------------------- */
   'error': { channel: 'error', source: 'extension', label: 'Error detected' },
+  /*
+   * A scan is `evidence`, not `error`. It is not itself a failure -- it is the
+   * page state captured because one happened, and filing it under `error`
+   * would double every failure in the Errors tab and in the error count.
+   */
+  'surface-scan': { channel: 'evidence', source: 'extension', label: 'Page captured' },
+  'surface-scan-failed': { channel: 'evidence', source: 'extension', label: 'Page capture failed' },
   'response-timeout': { channel: 'error', source: 'extension', label: 'AI response timed out' },
   'environment-drift': { channel: 'error', source: 'extension', label: 'Environment changed' },
   'awaiting-user': { channel: 'error', source: 'extension', label: 'Waiting for you' },

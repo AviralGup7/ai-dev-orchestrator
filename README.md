@@ -73,7 +73,16 @@ report, and commit/test/logging expectations, then appends the project state
 assembled from memory. Arena's reply is parsed into typed evidence, and any
 field that would let it choose direction is dropped before the loop sees it.
 
-**5 · The environment is inherited, never created.**
+**5 · When something breaks, the page is captured with it.**
+
+An error in the log triggers an automatic scan of the page behind it — what it
+said, which controls were disabled, whether it was still loading — attached to
+the log as readable markdown. A repeat failure is reported as a diff, and an
+unchanged page is called out as stuck. Redacted, bounded, and rate-limited so a
+failing scan cannot feed itself. See
+[`docs/SURFACE-SCAN.md`](docs/SURFACE-SCAN.md).
+
+**6 · The environment is inherited, never created.**
 
 The tabs are already open, the conversations are already chosen, and the user
 is already signed in. The orchestrator switches focus between those tabs, types
@@ -112,6 +121,7 @@ src/core/        the engine — pure, no browser, runs in Node
   protocol.js      the orchestration protocol injected before every prompt
   report.js        parses Arena's report into typed evidence
   preflight.js     the pre-start checklist
+  surface.js       what a page capture keeps, and when one is allowed
 src/adapters/    per-AI request/response shaping (next milestone)
 src/transports/  the only layer that knows about tabs
 extension/       manifest, service worker, popup, side panel, renderers
@@ -119,11 +129,14 @@ extension/       manifest, service worker, popup, side panel, renderers
   panel.js         side-panel controller
   background.js    owns the run; survives panel close and MV3 eviction
   idbsink.js       IndexedDB log store + chrome.storage memory store
+  probe.js         reads open tabs into an environment snapshot
+  scan.js          reads a page into a capture (injected, read-only)
 docs/SPEC.md          the specification
 docs/ENVIRONMENT.md   the pre-initiated environment contract
 docs/OBSERVABILITY.md the logging subsystem and the UI
 docs/FIRSTRUN.md      the three workflow modes and the injected protocol
 docs/INSTALL.md       loading it in Chrome, and why dist/ exists
+docs/SURFACE-SCAN.md  automatic page capture on error
 ```
 
 ## Installing

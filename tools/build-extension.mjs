@@ -200,12 +200,23 @@ manifest.icons = { 16: 'icon16.png', 48: 'icon48.png', 128: 'icon128.png' };
 manifest.action = { ...manifest.action, default_icon: manifest.icons };
 
 /*
- * `scripting` is removed. Nothing calls it, and the adapters that eventually
- * will are not written. Requesting a permission before it is used inflates the
- * install prompt for no benefit, and "read and change your data on these
- * sites" is exactly the prompt a user should be able to read honestly.
+ * `scripting` is KEPT now, and that is a reversal worth stating.
+ *
+ * It was stripped last session on the grounds that nothing called it and an
+ * unused permission inflates the install prompt for no benefit. Surface
+ * scanning calls it: `chrome.scripting.executeScript` is how a page is read
+ * when an error happens. The reasoning has not changed -- ask for what is
+ * used -- only the facts have.
+ *
+ * The build asserts the justification still holds rather than trusting the
+ * comment, because the comment is what went stale last time.
  */
-manifest.permissions = manifest.permissions.filter((p) => p !== 'scripting');
+const usesScripting = readdirSync('extension')
+  .filter((f) => f.endsWith('.js'))
+  .some((f) => readFileSync(join('extension', f), 'utf8').includes('chrome.scripting'));
+if (!usesScripting) {
+  manifest.permissions = manifest.permissions.filter((p) => p !== 'scripting');
+}
 
 writeFileSync(join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 

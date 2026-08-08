@@ -9,6 +9,7 @@
     "unlimitedStorage",
     "sidePanel",
     "downloads",
+    "scripting",
     "notifications"
   ],
   "host_permissions": [
