@@ -561,3 +561,129 @@ test('a genuinely BLANK page is reported as blank, not as a selector bug', async
   assert.equal(err.detail.phase, 'no-content', 'an empty page is a different fault');
   assert.doesNotMatch(err.message, /do not match this page/);
 });
+
+/* ---------------------------------------------------------------------------
+ * PASTE VERIFICATION (run 202608081932)
+ *
+ * The log said "Pasted 2029 characters into the manager composer" and the very
+ * next call failed with "could not submit on manager: no send control".
+ *
+ * Both facts are explained by one cause: ChatGPT's composer is React-
+ * controlled and did not accept the programmatic write, so React never
+ * re-rendered, so the send button was never mounted. `pageType` had asserted
+ * success having only assigned to a property — it never read the value back.
+ *
+ * These drive the real injected functions, which had no tests at all because
+ * they were not exported.
+ * ------------------------------------------------------------------------ */
+
+function stubEl({ editable = false, text = '', accepts = true } = {}) {
+  const el = {
+    isContentEditable: editable,
+    value: editable ? undefined : text,
+    textContent: editable ? text : undefined,
+    disabled: false,
+    focus() {},
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ width: 10, height: 10 }),
+    dispatchEvent() { return true; },
+    click() { el.clicked = true; },
+    clicked: false,
+  };
+  // A React-controlled composer that REJECTS the write reverts to empty.
+  if (!accepts) {
+    Object.defineProperty(el, editable ? 'textContent' : 'value', {
+      get: () => '', set: () => {}, configurable: true,
+    });
+  }
+  return el;
+}
+
+function withDoc(map, fn) {
+  const g = globalThis;
+  const saved = { d: g.document, k: g.KeyboardEvent, i: g.InputEvent, e: g.Event, cs: g.getComputedStyle };
+  g.document = { querySelector: (s) => map[s] ?? null, body: { innerText: '' } };
+  g.KeyboardEvent = class { constructor(t, o) { Object.assign(this, { type: t }, o); } };
+  g.InputEvent = class { constructor(t, o) { Object.assign(this, { type: t }, o); } };
+  g.Event = class { constructor(t, o) { Object.assign(this, { type: t }, o); } };
+  g.getComputedStyle = () => ({ display: 'block', visibility: 'visible' });
+  return Promise.resolve(fn()).finally(() => {
+    g.document = saved.d; g.KeyboardEvent = saved.k; g.InputEvent = saved.i;
+    g.Event = saved.e; g.getComputedStyle = saved.cs;
+  });
+}
+
+test('A COMPOSER THAT SILENTLY REJECTS THE TEXT IS A FAILED PASTE, NOT A SUCCESS', async () => {
+  const { pageType } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, accepts: false });
+
+  await withDoc({ '#prompt-textarea': composer }, () => {
+    const r = pageType({ composer: ['#prompt-textarea'] }, 'x'.repeat(2029));
+    assert.equal(r.ok, false,
+      'reporting a successful paste that did not happen is what hid this for a whole run');
+    assert.match(r.why, /did not accept/);
+    assert.equal(r.wrote, 2029);
+    assert.equal(r.readBack, 0, 'the read-back is the evidence');
+  });
+});
+
+test('a composer that accepts the text still reports success', async () => {
+  const { pageType } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, accepts: true });
+  await withDoc({ '#prompt-textarea': composer }, () => {
+    const r = pageType({ composer: ['#prompt-textarea'] }, 'hello there, this is the prompt');
+    assert.equal(r.ok, true);
+    assert.ok(r.readBack > 0);
+  });
+});
+
+test('A SEND BUTTON THAT IS NOT MOUNTED YET FALLS BACK TO ENTER', async () => {
+  /*
+   * ChatGPT does not keep a disabled send button in the DOM; it MOUNTS one
+   * when React re-renders. Looking in the same tick finds nothing, which read
+   * as "no send control" — a message that sounds like a rotted selector and is
+   * not. Enter is how a human submits, and it goes through the page's own
+   * handler.
+   */
+  const { pageClick } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, text: 'the prompt' });
+  const sent = [];
+  composer.dispatchEvent = (e) => { sent.push(e.key); return true; };
+
+  await withDoc({ '#prompt-textarea': composer }, async () => {
+    const r = await pageClick(
+      { composer: ['#prompt-textarea'], send: ['button[data-testid="send-button"]'] }, 'send');
+    assert.equal(r.ok, true, 'a missing button must not end the iteration');
+    assert.equal(r.via, 'enter');
+    assert.ok(sent.includes('Enter'), 'Enter must actually reach the composer');
+  });
+});
+
+test('the send button is preferred when it IS present', async () => {
+  const { pageClick } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, text: 'x' });
+  const button = stubEl();
+  await withDoc({ '#prompt-textarea': composer, 'button#send': button }, async () => {
+    const r = await pageClick({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'send');
+    assert.equal(r.via, 'click', 'the real control beats the keyboard fallback');
+    assert.equal(button.clicked, true);
+  });
+});
+
+test('a missing STOP control does NOT fall back to Enter', async () => {
+  /*
+   * The counterweight, and it matters: synthesising Enter to try to stop a
+   * running generation would SUBMIT the composer instead — the exact opposite
+   * of the intent.
+   */
+  const { pageClick } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, text: 'x' });
+  const seen = [];
+  composer.dispatchEvent = (e) => { seen.push(e.key); return true; };
+
+  await withDoc({ '#prompt-textarea': composer }, async () => {
+    const r = await pageClick({ composer: ['#prompt-textarea'], stop: ['button#stop'] }, 'stop');
+    assert.equal(r.ok, false, 'a missing stop control is an honest failure');
+    assert.ok(!seen.includes('Enter'), 'pressing Enter here would submit, not stop');
+  });
+});

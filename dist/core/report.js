@@ -91,7 +91,84 @@ export function extractBlock(text, fence = REPORT_FENCE) {
       /* not our block */
     }
   }
-  return fb;
+  if (fb !== null) return fb;
+
+  /*
+   * FALLBACK 2: THE TEXT WAS READ FROM A RENDERED PAGE, SO THERE ARE NO
+   * BACKTICKS AT ALL.
+   *
+   * Both branches above require literal ``` characters. That is correct for
+   * markdown SOURCE and wrong for everything this project actually reads: the
+   * transport takes `element.innerText`, and by then the browser has turned
+   * ```ORCHESTRATOR-REPORT into a <pre><code> whose text contains the fence
+   * NAME and the JSON but not one backtick. The chrome around it ("Copy",
+   * "Edit", a language label) is rendered as text too.
+   *
+   * This is not hypothetical. Run 202608081932: the engineer worked for 378
+   * seconds, returned 60,433 characters, and the whole thing was thrown away
+   * as `response-malformed` -- "the engineer either ignored the protocol or
+   * the response was truncated" -- when it had done neither. The iteration was
+   * lost to a markdown artefact.
+   *
+   * Strategy: find the fence NAME, then take the first balanced JSON object
+   * after it. Brace matching rather than a regex, because the report contains
+   * nested objects and prose full of braces, and a greedy or lazy match gets
+   * one of those two cases wrong.
+   */
+  const at = src.lastIndexOf(fence);
+  if (at !== -1) {
+    const body = firstJsonObject(src, at + fence.length);
+    if (body) {
+      try {
+        const obj = JSON.parse(relaxed(body));
+        if (required.some((k) => k in obj)) return body;
+      } catch {
+        /*
+         * Returned anyway when it LOOKS like our report.
+         *
+         * `parseReport` reports precise per-field problems and can re-prompt
+         * with them attached; returning null here throws all of that away and
+         * says only "no block found", which is the least actionable message
+         * available and -- as the run above showed -- an actively misleading
+         * one.
+         */
+        if (required.some((k) => body.includes(`"${k}"`) || body.includes(`${k}:`))) return body;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * The first brace-balanced `{...}` at or after `from`.
+ *
+ * String-aware: a `}` inside a JSON string, or an escaped quote, must not end
+ * the object. `engineeringReport` is free prose and routinely contains both.
+ *
+ * @returns {string|null}
+ */
+function firstJsonObject(src, from) {
+  const start = src.indexOf('{', from);
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+
+  for (let i = start; i < src.length; i++) {
+    const ch = src[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\') { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  return null;   // never closed: truncated, which is a real and different fault
 }
 
 /**

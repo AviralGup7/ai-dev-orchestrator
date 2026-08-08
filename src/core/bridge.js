@@ -68,7 +68,17 @@ const MAP = {
    * leaving the map incomplete.
    */
   'run-finished': 'workflow-completed',
-  'run-failed': 'iteration-failed',
+  /*
+   * `run-failed` is the RUN ending, not an iteration ending.
+   *
+   * It was aliased onto 'iteration-failed', so a single failure printed twice:
+   * once correctly ("Iteration 1 failed: ...") and once as "Iteration
+   * undefined failed: ..." -- because the run-level event carries no `n`.
+   * Observed in run 202608081932, events 000037 and 000038. Two log lines for
+   * one fault teaches the reader the log is unreliable, and "undefined" in
+   * user-visible text reads like a crash.
+   */
+  'run-failed': 'workflow-failed',
   'run-retrying': 'step-retried',
   'phase-started': 'planning-started',
   'phase-completed': 'evidence-collected',
@@ -79,7 +89,7 @@ const MAP = {
 };
 
 /** Which engine events are failures. Everything else defaults to success. */
-const ERRORS = new Set(['iteration-failed', 'environment-drift', 'run-blocked', 'run-failed', 'recovery-failed']);
+const ERRORS = new Set(['iteration-failed', 'workflow-failed', 'environment-drift', 'run-blocked', 'run-failed', 'recovery-failed']);
 const WARNINGS = new Set([
   'stagnation-detected', 'attempt-failed', 'step-skipped', 'step-retried', 'phase-skipped',
   'recovery-attempt', 'run-retrying',
@@ -114,6 +124,8 @@ function describeLogEvent(type, e) {
       return `Iteration ${e.n} finished at ${e.overall ?? '—'}% overall`;
     case 'iteration-failed':
       return `Iteration ${e.n} failed: ${e.error}`;
+    case 'workflow-failed':
+      return `The run stopped: ${e.error}`;
     case 'planning-complete':
       return e.objective ? `Objective: ${e.objective}` : 'Objective decided';
     case 'task-complete':

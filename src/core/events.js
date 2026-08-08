@@ -74,6 +74,7 @@ export const EVENT_TYPES = /** @type {const} */ ({
   'workflow-resumed': { channel: 'lifecycle', source: 'user', label: 'Workflow resumed' },
   'workflow-stopped': { channel: 'lifecycle', source: 'user', label: 'Workflow stopped' },
   'workflow-completed': { channel: 'lifecycle', source: 'extension', label: 'Workflow completed' },
+  'workflow-failed': { channel: 'error', source: 'extension', label: 'Workflow failed' },
   'workflow-blocked': { channel: 'lifecycle', source: 'extension', label: 'Workflow blocked' },
   'session-ended': { channel: 'system', source: 'system', label: 'Session ended' },
 

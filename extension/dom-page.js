@@ -22,7 +22,7 @@ import { REPORT_FENCE } from '../src/core/protocol.js';
  * send button stays disabled and the submit does nothing. The native setter
  * plus a bubbling `input` event is what actually makes the framework notice.
  */
-function pageType(selectors, text) {
+export function pageType(selectors, text) {
   const pick = (list) => { for (const s of list) { const el = document.querySelector(s); if (el) return el; } return null; };
   const el = pick(selectors.composer);
   if (!el) return { ok: false, why: 'no composer' };
@@ -43,24 +43,87 @@ function pageType(selectors, text) {
     if (setter) setter.call(el, text); else el.value = text;
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }
-  return { ok: true, chars: text.length };
+
+  /*
+   * VERIFY THE TEXT ACTUALLY LANDED. DO NOT TAKE OUR OWN WORD FOR IT.
+   *
+   * This used to return `{ok: true}` unconditionally, having only assigned to
+   * a property. In run 202608081932 it reported "Pasted 2029 characters into
+   * the manager composer" and the very next call failed with "no send
+   * control" -- because ChatGPT only renders its send button once React
+   * believes the composer is non-empty, and React had not accepted the
+   * assignment. The paste had not worked; only our report of it had.
+   *
+   * Reading the value back is the difference between "I set a property" and
+   * "the page has the text".
+   */
+  const got = el.isContentEditable ? (el.textContent || '') : (el.value || '');
+  if (got.length < Math.min(text.length, 32)) {
+    return {
+      ok: false,
+      why: `the composer did not accept the text (wrote ${text.length} characters, read back ${got.length}) `
+        + '— the page framework rejected the programmatic input',
+      wrote: text.length,
+      readBack: got.length,
+    };
+  }
+
+  return { ok: true, chars: text.length, readBack: got.length };
 }
 
 /** Click send, preferring the button over a synthetic Enter. */
-function pageClick(selectors, which) {
+export async function pageClick(selectors, which) {
   const pick = (list) => { for (const s of list) { const el = document.querySelector(s); if (el) return el; } return null; };
-  const el = pick(which === 'stop' ? selectors.stop : selectors.send);
-  if (!el) return { ok: false, why: `no ${which} control` };
-  if (el.disabled || el.getAttribute('aria-disabled') === 'true') {
-    /*
-     * Reported rather than forced. A disabled send button usually means the
-     * composer did not actually receive the text -- the React problem above --
-     * and clicking harder will not fix it. Saying so names the real fault.
-     */
-    return { ok: false, why: `the ${which} control is disabled` };
+
+  /*
+   * WAIT BRIEFLY FOR THE CONTROL TO APPEAR.
+   *
+   * ChatGPT does not keep a disabled send button in the DOM -- it MOUNTS one
+   * once React re-renders with a non-empty composer. Looking synchronously in
+   * the same tick as the paste therefore finds nothing and reports "no send
+   * control", which reads like a rotted selector and is not: the button
+   * simply does not exist yet. Backgrounded tabs (the failing run had
+   * `visibility: hidden`) render on a slower schedule, which is exactly when
+   * this bites.
+   *
+   * ~1.5s of polling, not a fixed sleep, and only on the miss path.
+   */
+  let el = pick(which === 'stop' ? selectors.stop : selectors.send);
+  for (let i = 0; !el && i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    el = pick(which === 'stop' ? selectors.stop : selectors.send);
   }
+
+  const composer = pick(selectors.composer);
+
+  if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') {
+    /*
+     * FALL BACK TO ENTER, because for these composers it is not a hack: it is
+     * the primary way a human submits, and it goes through the framework's own
+     * keyboard handler rather than depending on a button we located.
+     *
+     * Only attempted for `send`. Synthesising Enter to try to STOP a running
+     * generation would submit the composer instead -- the opposite of the
+     * intent -- so a missing stop control stays an honest failure.
+     */
+    if (which === 'send' && composer) {
+      composer.focus();
+      for (const type of ['keydown', 'keypress', 'keyup']) {
+        composer.dispatchEvent(new KeyboardEvent(type, {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+          bubbles: true, cancelable: true, composed: true,
+        }));
+      }
+      return { ok: true, via: 'enter', why: el ? 'the send button was disabled' : 'no send button was mounted' };
+    }
+    return {
+      ok: false,
+      why: el ? `the ${which} control is disabled` : `no ${which} control appeared within 1.5s`,
+    };
+  }
+
   el.click();
-  return { ok: true };
+  return { ok: true, via: 'click' };
 }
 
 /**

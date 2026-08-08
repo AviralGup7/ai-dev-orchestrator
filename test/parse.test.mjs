@@ -11,6 +11,7 @@ import {
   parseTests, parseBuild, parseLint, parseCoverage, parseDiff, parseCommit,
   parseAll, explainEvidence, clean,
 } from '../src/core/parse.js';
+import { extractBlock, parseReport } from '../src/core/report.js';
 
 const ctx = { source: 'arena-terminal', sourceType: 'terminal', iteration: 7, phase: 'execute' };
 
@@ -216,4 +217,96 @@ test('a commit sha is captured as corroboration, not as a new evidence kind', ()
   const e = parseCommit('[main a1b2c3d] feat: streaming export', ctx);
   assert.equal(e.kind, 'log');
   assert.equal(e.sha, 'a1b2c3d');
+});
+
+/* ---------------------------------------------------------------------------
+ * THE RENDERED-PAGE FENCE (run 202608081932)
+ *
+ * The engineer worked for 378 seconds and returned 60,433 characters. All of
+ * it was discarded as `response-malformed` — "the engineer either ignored the
+ * protocol or the response was truncated" — when it had done neither.
+ *
+ * Cause: both extraction branches required literal ``` characters, but the
+ * transport reads `element.innerText`, and a RENDERED code block has no
+ * backticks in its text. The parser was written for markdown source and fed
+ * rendered output for the whole life of the project.
+ * ------------------------------------------------------------------------ */
+
+const FULL = {
+  taskStatus: 'complete', summary: 's', filesModified: [],
+  build: { ran: true, ok: true, command: 'npm run build', output: 'ok' },
+  tests: { ran: true, passed: 431, failed: 0, skipped: 0, command: 'node --test' },
+  commit: { made: true, sha: 'abc1234', message: 'm' },
+  knownIssues: [], risks: [], engineeringReport: 'r',
+};
+
+test('A REPORT READ FROM A RENDERED PAGE IS FOUND WITHOUT ANY BACKTICKS', () => {
+  // Exactly what innerText yields for a rendered ```ORCHESTRATOR-REPORT block.
+  const rendered = `Here is what I did.\n\nORCHESTRATOR-REPORT\n${JSON.stringify(FULL, null, 2)}\n`;
+
+  const block = extractBlock(rendered);
+  assert.ok(block, 'a rendered report must be findable — 60,433 characters were lost to this');
+
+  const p = parseReport(rendered);
+  assert.equal(p.ok, true, `expected a clean parse, got: ${p.problems.join('; ')}`);
+  assert.equal(p.report.tests.passed, 431);
+  assert.equal(p.report.commit.sha, 'abc1234');
+});
+
+test('the rendered fallback survives the copy-button chrome sites inject', () => {
+  /*
+   * ChatGPT and Arena render a language label and a "Copy" affordance inside
+   * the code block; both come back as plain text between the fence name and
+   * the JSON.
+   */
+  const withChrome = `ORCHESTRATOR-REPORT\njson\nCopy\nEdit\n${JSON.stringify(FULL)}`;
+  assert.equal(parseReport(withChrome).ok, true, 'page chrome must not defeat extraction');
+});
+
+test('BRACES INSIDE PROSE DO NOT TRUNCATE THE REPORT', () => {
+  /*
+   * `engineeringReport` is free prose and routinely contains braces and
+   * escaped quotes. A regex-based grab ends the object at the first `}` and
+   * silently produces a SHORT report — worse than failing, because it parses.
+   */
+  const tricky = { ...FULL, engineeringReport: 'I fixed the } brace and the "quote" and {nested} too' };
+  const rendered = `ORCHESTRATOR-REPORT\n${JSON.stringify(tricky)}\ntrailing prose after the block`;
+
+  const p = parseReport(rendered);
+  assert.equal(p.ok, true, 'brace-matching must be string-aware');
+  assert.equal(p.report.engineeringReport, tricky.engineeringReport,
+    'the prose must survive intact, braces and all');
+  assert.equal(p.report.build.ok, true, 'nested objects must not end the match early');
+});
+
+test('the fenced form still wins when both are present', () => {
+  /*
+   * The backtick branch is more precise: it is bounded on both sides. The new
+   * fallback must not override it, or a correction the model fenced properly
+   * could lose to an earlier mention.
+   */
+  const both = '```ORCHESTRATOR-REPORT\n' + JSON.stringify({ ...FULL, summary: 'FENCED' })
+    + '\n```\n\nORCHESTRATOR-REPORT\n' + JSON.stringify({ ...FULL, summary: 'BARE' });
+  assert.equal(parseReport(both).report.summary, 'FENCED');
+});
+
+test('prose that merely MENTIONS the fence is not mistaken for a report', () => {
+  /*
+   * The counterweight. The fallback keys on a name that also appears in the
+   * instructions we send, so an engineer discussing the protocol must not
+   * produce a phantom report.
+   */
+  const chat = 'I could not find the ORCHESTRATOR-REPORT format documented anywhere, so I am asking.';
+  assert.equal(extractBlock(chat), null, 'a mention with no JSON object is not a report');
+  assert.equal(parseReport(chat).ok, false);
+});
+
+test('a TRUNCATED report is still reported as truncated, not silently half-parsed', () => {
+  /*
+   * The genuine truncation case the old message claimed. An object that never
+   * closes must not yield a partial report — a wrong report that parses is far
+   * more dangerous than one that fails.
+   */
+  const cut = 'ORCHESTRATOR-REPORT\n{ "taskStatus": "complete", "summary": "it was going so we';
+  assert.equal(extractBlock(cut), null, 'an unclosed object must not be returned');
 });

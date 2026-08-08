@@ -274,3 +274,69 @@ test('the abandonment notice is escaped like every other interpolated value', ()
   assert.ok(!nasty.includes('<img src=x'), 'the notice must be escaped');
   assert.match(nasty, /&lt;img/);
 });
+
+/* ---------------------------------------------------------------------------
+ * ONE FAULT, ONE LOG LINE (run 202608081932)
+ *
+ * A single failure produced two entries:
+ *   000037  Iteration 1 failed: could not submit on manager: no send control
+ *   000038  Iteration undefined failed: could not submit on manager: no send control
+ *
+ * `run-failed` — the RUN ending — was aliased onto `iteration-failed` in
+ * bridge.js, and the run-level event carries no `n`. Two lines for one fault
+ * teaches the reader the log is unreliable, and "undefined" in user-visible
+ * text reads like a crash.
+ * ------------------------------------------------------------------------ */
+
+test('A RUN-LEVEL FAILURE NEVER RENDERS AS "Iteration undefined"', async () => {
+  const { bridgeToLogger } = await import('../src/core/bridge.js');
+  const log = new Logger();
+  const bridge = bridgeToLogger(log);
+
+  bridge({ type: 'run-failed', error: 'could not submit on manager: no send control' });
+
+  const entries = log.live;
+  assert.equal(entries.length, 1, 'the run ending must produce exactly one entry');
+  const e = entries[0];
+
+  assert.notEqual(e.type, 'iteration-failed',
+    'the run ending is not an iteration ending; aliasing them is what duplicated the line');
+  assert.doesNotMatch(String(e.description), /undefined/,
+    '"Iteration undefined failed" is what the user actually saw');
+  assert.match(String(e.description), /could not submit on manager/,
+    'the cause must survive the rename');
+  assert.equal(e.status, 'error', 'the run stopping is the most severe thing in the log');
+});
+
+test('one fault produces one line, not two', async () => {
+  /*
+   * The actual defect: orchestrator emits `iteration-failed`, runner then
+   * emits `run-failed`, and both mapped to the same log type — so the reader
+   * saw the same error twice, the second time with a broken iteration number.
+   */
+  const { bridgeToLogger } = await import('../src/core/bridge.js');
+  const log = new Logger();
+  const bridge = bridgeToLogger(log);
+
+  bridge({ type: 'iteration-failed', n: 1, error: 'no send control' });
+  bridge({ type: 'run-failed', error: 'no send control' });
+
+  const types = log.live.map((x) => x.type);
+  assert.equal(new Set(types).size, 2,
+    `the two events must be distinguishable, got ${JSON.stringify(types)}`);
+  assert.match(String(log.live[0].description), /Iteration 1 failed/);
+  assert.doesNotMatch(String(log.live[1].description), /Iteration/,
+    'the run-level line must not pretend to be about an iteration');
+});
+
+test('run-failed is still mapped at all — an unmapped event is its own bug', async () => {
+  /*
+   * The bridge logs unmapped events as "the log vocabulary is out of date".
+   * Renaming the target must not leave run-failed unmapped, which would trade
+   * one wrong line for a different wrong line.
+   */
+  const { bridgeToLogger } = await import('../src/core/bridge.js');
+  const log = new Logger();
+  bridgeToLogger(log)({ type: 'run-failed', error: 'x' });
+  assert.doesNotMatch(String(log.live[0].description), /vocabulary is out of date/);
+});
