@@ -34,7 +34,19 @@ const FORBIDDEN = [
   { re: /(?<![.\w$])document\s*\./, why: 'DOM' },
   { re: /(?<![.\w$])window\s*\./, why: 'DOM' },
   { re: /\blocalStorage\b/, why: 'browser storage' },
-  { re: /\bfetch\s*\(/, why: 'network — belongs in a transport' },
+  /*
+   * `fetch(` only when it is a GLOBAL call, not a method.
+   *
+   * The first version flagged `this.fetch(artifact)` in artifacts.js -- a
+   * registry method that downloads a file through an injected downloader and
+   * touches no network itself. The name is the right name for what it does,
+   * and renaming a method to appease a checker is how checkers start being
+   * worked around instead of fixed (§32).
+   *
+   * `(?<![.\w$])` -- not preceded by a dot or identifier character -- is the
+   * same guard already used for `window.` and `document.`, applied here.
+   */
+  { re: /(?<![.\w$])(?<!async\s)(?<!function\s)fetch\s*\(/, why: 'network — belongs in a transport' },
   { re: /\bXMLHttpRequest\b/, why: 'network — belongs in a transport' },
 ];
 
