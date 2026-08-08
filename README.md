@@ -123,18 +123,34 @@ docs/SPEC.md          the specification
 docs/ENVIRONMENT.md   the pre-initiated environment contract
 docs/OBSERVABILITY.md the logging subsystem and the UI
 docs/FIRSTRUN.md      the three workflow modes and the injected protocol
+docs/INSTALL.md       loading it in Chrome, and why dist/ exists
 ```
+
+## Installing
+
+```bash
+npm run build   # writes dist/, then verifies Chrome can load it
+```
+
+Then `chrome://extensions` → Developer mode → **Load unpacked** → select
+**`dist/`**.
+
+Load `dist/`, not `extension/`: the source imports `../src/core/…`, which is
+above the package root and cannot be fetched by a service worker. The build
+assembles a root Chrome accepts and rewrites those imports. Full explanation in
+[`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Commands
 
 ```
-npm test            200 tests, no browser required
+npm test            207 tests, no browser required
+npm run build       assemble dist/ and verify Chrome can load it
 npm run purity      fails if the engine grows a browser dependency
 npm run env-safety  fails if anything can open/close/navigate a tab
-npm run sabotage    breaks the code 50 ways; every break must fail a named test
+npm run sabotage    breaks the code 53 ways; every break must fail a named test
 npm run demo        builds demo.html — the real UI, fake AIs, sped-up clock
 npm run smoke       runs the demo headlessly and checks the log is coherent
-npm run check       purity + env-safety + tests + demo build
+npm run check       purity + env-safety + tests + extension build + demo
 ```
 
 ## A risk worth stating

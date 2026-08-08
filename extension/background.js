@@ -27,6 +27,19 @@ import { toNdjson } from '../src/core/logsink.js';
 import { summarise } from '../src/core/logger.js';
 import { IdbLogSink, ChromeStore } from './idbsink.js';
 
+/**
+ * Never let an error about an error hide the real one.
+ *
+ * `err.message` throws when `err` is null or undefined -- which happens for
+ * real: IndexedDB rejects with `req.error`, and that is null when the database
+ * cannot be opened at all. The result was a service worker reporting
+ * "Cannot read properties of undefined (reading 'message')", an error about
+ * the error, while the actual fact (storage unavailable) never reached the
+ * log. src/core has used `String(err?.message || err)` throughout for exactly
+ * this reason; the extension layer had not caught up.
+ */
+const reason = (err) => String(err?.message || err || 'unknown error');
+
 const sink = new IdbLogSink();
 const store = new ChromeStore();
 const logger = new Logger({ sink, liveLimit: 500, onEvent: broadcast });
@@ -62,7 +75,7 @@ async function rehydrate() {
       });
     }
   } catch (err) {
-    logger.log('error', { status: 'error', source: 'system', description: `Could not restore the log: ${err.message}` });
+    logger.log('error', { status: 'error', source: 'system', description: `Could not restore the log: ${reason(err)}` });
   }
 }
 
@@ -82,7 +95,22 @@ function snapshot() {
 
 /** Push state to any open view. Failure is expected when none is open. */
 function broadcast() {
-  chrome.runtime.sendMessage({ kind: 'state', state: snapshot() }).catch(() => {});
+  /*
+   * Wrapped in try/catch as well as .catch().
+   *
+   * With no panel open there is no receiver, and Chrome signals that either by
+   * rejecting the promise OR by throwing synchronously, depending on version.
+   * A synchronous throw here would propagate out of `log()`'s subscriber call
+   * and, before that path was hardened, could take down a command handler --
+   * meaning the extension breaks precisely when nobody is watching it, which
+   * is the hardest state to debug.
+   */
+  try {
+    const p = chrome.runtime.sendMessage({ kind: 'state', state: snapshot() });
+    if (p?.catch) p.catch(() => {});
+  } catch {
+    /* no receiver; expected whenever the panel is closed */
+  }
 }
 
 /**
@@ -218,8 +246,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   Promise.resolve(fn(msg))
     .then(reply)
     .catch((err) => {
-      logger.log('error', { status: 'error', description: `Command "${msg.kind}" failed: ${err.message}`, data: { stack: err.stack } });
-      reply({ ok: false, error: String(err.message) });
+      logger.log('error', { status: 'error', description: `Command "${msg.kind}" failed: ${reason(err)}`, data: { stack: err?.stack ?? null } });
+      reply({ ok: false, error: reason(err) });
     });
   return true; // async reply
 });

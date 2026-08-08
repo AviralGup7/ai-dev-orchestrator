@@ -356,7 +356,7 @@ const CASES = [
   {
     name: 'the metadata block grows without bound',
     file: 'src/core/protocol.js',
-    from: '    for (const i of memory.openIssues.slice(0, maxIssues)) lines.push(`  - ${truncate(i, 160)}`);',
+    from: '    for (const i of memory.openIssues.slice(0, maxIssues)) lines.push(`  - ${clip(i, 160)}`);',
     to: '    for (const i of memory.openIssues) lines.push(`  - ${i}`);',
     expect: 'bounded so it cannot push the protocol',
     test: 'test/firstrun.test.mjs',
@@ -416,6 +416,31 @@ const CASES = [
     to: "          : tabPresent\n          ? 'no Arena tab was reported, so no workspace could be checked'",
     expect: 'outside a workspace fails the workspace check',
     test: 'test/firstrun.test.mjs',
+  },
+  /* ---- packaging (session 5) --------------------------------------- */
+  {
+    name: 'an IndexedDB rejection carries no Error object',
+    file: 'extension/idbsink.js',
+    from: "      req.onerror = () => reject(req.error || new Error('IndexedDB could not be opened'));",
+    to: '      req.onerror = () => reject(req.error);',
+    expect: 'DEGRADES HONESTLY when storage is unavailable',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'the worker reports an error about the error',
+    file: 'extension/background.js',
+    from: "const reason = (err) => String(err?.message || err || 'unknown error');",
+    to: 'const reason = (err) => String(err.message);',
+    expect: 'names the real problem even when a rejection carries nothing',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'broadcast() is not guarded against a synchronous throw',
+    file: 'extension/background.js',
+    from: '    const p = chrome.runtime.sendMessage({ kind: \'state\', state: snapshot() });\n    if (p?.catch) p.catch(() => {});',
+    to: "    chrome.runtime.sendMessage({ kind: 'state', state: snapshot() });",
+    expect: 'survives a browser with no panel open',
+    test: 'test/packaging.test.mjs',
   },
 ];
 

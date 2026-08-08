@@ -9,9 +9,10 @@
     "purity": "node tools/check-purity.mjs",
     "env-safety": "node tools/check-env-safety.mjs",
     "sabotage": "node tools/sabotage.mjs",
+    "build": "node tools/build-extension.mjs && node tools/check-loadable.mjs",
     "demo": "node tools/build-demo.mjs",
     "smoke": "node tools/smoke-demo.mjs",
-    "check": "npm run purity && npm run env-safety && npm test && npm run demo"
+    "check": "npm run purity && npm run env-safety && npm test && npm run build && npm run demo"
   },
   "engines": {
     "node": ">=20"

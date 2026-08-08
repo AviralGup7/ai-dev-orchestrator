@@ -45,7 +45,19 @@ export class IdbLogSink {
         }
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      /*
+       * `req.error` CAN BE NULL, and rejecting with null is how a storage
+       * failure became "Cannot read properties of undefined (reading
+       * 'message')" in the service worker -- an error about the error, which
+       * tells the user nothing about their disk being full.
+       *
+       * IndexedDB is unavailable entirely in some contexts (a worker in a
+       * partitioned context, storage disabled by policy), and in those cases
+       * the request errors with no `error` object at all. Every rejection here
+       * carries a real Error so the log says what happened.
+       */
+      req.onerror = () => reject(req.error || new Error('IndexedDB could not be opened'));
+      req.onblocked = () => reject(new Error('IndexedDB is blocked by another connection'));
     });
     return this._db;
   }
@@ -66,7 +78,7 @@ export class IdbLogSink {
       const store = tx.objectStore(STORE);
       for (const e of batch) store.put(e);
       tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error || new Error('log write failed'));
       tx.onabort = () => reject(tx.error || new Error('log write aborted (quota?)'));
     });
   }
@@ -76,7 +88,7 @@ export class IdbLogSink {
     return new Promise((resolve, reject) => {
       const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAll();
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onerror = () => reject(req.error || new Error('could not read the log'));
     });
   }
 
@@ -91,7 +103,7 @@ export class IdbLogSink {
     return new Promise((resolve, reject) => {
       const req = db.transaction(STORE, 'readonly').objectStore(STORE).count();
       req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      req.onerror = () => reject(req.error || new Error('could not count the log'));
     });
   }
 
@@ -101,7 +113,7 @@ export class IdbLogSink {
       const tx = db.transaction(STORE, 'readwrite');
       tx.objectStore(STORE).clear();
       tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error || new Error('could not clear the log'));
     });
   }
 }
