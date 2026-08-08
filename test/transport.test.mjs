@@ -343,9 +343,102 @@ test('progress is REPORTED during a long wait, not just endured', async () => {
   });
   await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 });
 
-  const progress = events.filter((e) => e.type === 'response-progress');
+  /*
+   * Filtered to the STREAMING phase specifically. Both waits emit
+   * `response-progress`, so an unfiltered count let this test pass on
+   * heartbeats from the first-turn wait -- it was catching a mutation of a
+   * line it does not exercise. Caught by tools/sabotage.mjs, not by reading.
+   */
+  const progress = events.filter((e) => e.type === 'response-progress' && e.phase === 'streaming');
   assert.ok(progress.length >= 2, `expected periodic progress, got ${progress.length}`);
   assert.ok(progress[0].elapsedMs > 0);
   assert.equal(typeof progress[0].silentMs, 'number');
   assert.equal(progress[0].surface, 'engineer');
+});
+
+/* ---------------------------------------------------------------------------
+ * THE BLIND-TRANSPORT BUG (run of 2026-08-08 17:10)
+ *
+ * The engineer's reply was on screen. The extension never saw it, because no
+ * `turns` selector matched Arena's markup. The transport was in phase 3 —
+ * "wait for a new turn to appear" — which had no diagnosis budget and emitted
+ * no events, so the four-hour engineer budget turned a selector bug into four
+ * silent hours and then the sentence "produced no reply".
+ *
+ * Two properties are asserted below and they pull in opposite directions,
+ * which is the point: give up FAST when we can see nothing at all, and give up
+ * NEVER while the page shows any sign of life.
+ * ------------------------------------------------------------------------ */
+
+test('A REPLY WE CANNOT SEE IS DIAGNOSED AS OUR BUG, NOT REPORTED AS NO REPLY', async () => {
+  // A page that accepted the prompt but whose assistant turns match nothing.
+  const blind = fakePage([{ composer: true, busy: undefined, turns: 0, lastText: '' }]);
+  const t = new DomTransport({ page: blind.page, now: blind.now, wait: blind.wait });
+
+  const err = await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 })
+    .then(() => null, (e) => e);
+
+  assert.ok(err instanceof TransportError, 'a blind read must fail loudly');
+  assert.equal(err.detail.phase, 'selector-miss',
+    'the phase must name OUR fault, not the model\'s silence');
+  assert.match(err.message, /selectors matched/,
+    'the message must point at the selectors, since that is what a human has to fix');
+  assert.deepEqual(err.detail.tried, SELECTORS.engineer.turns,
+    'it must report which selectors were tried, so the fix is one line');
+
+  // The load-bearing number: this is what made it unusable.
+  assert.ok(blind.now() <= DEFAULTS.firstTurnMs + 5_000,
+    `must fail in ~${DEFAULTS.firstTurnMs}ms, not four hours; took ${blind.now()}ms`);
+  assert.ok(blind.now() < 4 * 3600_000 / 100, 'it must not burn a meaningful slice of the budget');
+});
+
+test('a page that is merely SLOW to first token is still given its full budget', async () => {
+  /*
+   * The counterweight. If the diagnosis budget were applied to any page that
+   * has not produced a TURN yet, a model that thinks for two minutes before
+   * emitting a token would be killed at 90s — trading one false negative for
+   * another. Any sign of life (here: busy) must suspend the diagnosis.
+   */
+  const thinking = Array.from({ length: 400 }, () =>
+    ({ composer: true, busy: true, turns: 1, lastText: 'previous answer' }));
+  const f = fakePage([
+    frame(),
+    ...thinking,                                                  // ~5 min busy, no new turn
+    frame({ busy: true, turns: 2, lastText: 'here it comes' }),
+    ...Array.from({ length: 8 }, () => frame({ busy: false, turns: 2, lastText: 'the answer' })),
+  ]);
+  const t = new DomTransport({ page: f.page, now: f.now, wait: f.wait, config: { silenceMs: 3600_000 } });
+
+  const out = await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 });
+  assert.equal(out.text, 'the answer', 'a busy page must not be cut off by the diagnosis budget');
+  assert.ok(f.now() > DEFAULTS.firstTurnMs, 'this fixture must actually outlast the diagnosis budget');
+});
+
+test('the wait for a FIRST turn reports progress, not just the wait for completion', async () => {
+  /*
+   * The previous fix put heartbeats in `awaitCompletion` only. The run that
+   * went silent for 6.5 minutes never reached that function — it died in the
+   * phase before it. A heartbeat that is absent from the phase where runs
+   * actually hang is not a heartbeat.
+   */
+  const events = [];
+  const thinking = Array.from({ length: 400 }, () =>
+    ({ composer: true, busy: true, turns: 1, lastText: 'previous answer' }));
+  const f = fakePage([
+    frame(),
+    ...thinking,
+    frame({ busy: true, turns: 2, lastText: 'x' }),
+    ...Array.from({ length: 8 }, () => frame({ busy: false, turns: 2, lastText: 'done' })),
+  ]);
+  const t = new DomTransport({
+    page: f.page, now: f.now, wait: f.wait,
+    onEvent: (e) => events.push(e),
+    config: { silenceMs: 3600_000 },
+  });
+  await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 });
+
+  const early = events.filter((e) => e.type === 'response-progress' && e.phase === 'awaiting-first-turn');
+  assert.ok(early.length >= 2,
+    `expected heartbeats while waiting for the first turn, got ${early.length}`);
+  assert.ok(early[0].elapsedMs >= 60_000, 'the first heartbeat should land at about a minute');
 });

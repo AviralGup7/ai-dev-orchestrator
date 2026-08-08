@@ -962,6 +962,34 @@ const CASES = [
     test: 'test/transport.test.mjs',
   },
   {
+    /*
+     * The 2026-08-08 17:10 defect: a reply that was on screen was reported as
+     * "no reply" four hours later, because no `turns` selector matched.
+     */
+    name: 'a blind transport waits out the whole budget again',
+    file: 'src/transports/dom.js',
+    from: '      if (!sawAnything && this.now() >= firstTurnBy) {',
+    to: '      if (false) {',
+    expect: 'A REPLY WE CANNOT SEE IS DIAGNOSED AS OUR BUG',
+    test: 'test/transport.test.mjs',
+  },
+  {
+    name: 'signs of life no longer suspend the diagnosis budget',
+    file: 'src/transports/dom.js',
+    from: '      if (s.busy || s.turns > 0 || s.lastText) sawAnything = true;',
+    to: '      /* nothing counts as life */',
+    expect: 'a page that is merely SLOW to first token',
+    test: 'test/transport.test.mjs',
+  },
+  {
+    name: 'the first-turn wait goes silent again',
+    file: 'src/transports/dom.js',
+    from: '      if (waited - progressAt >= 60_000) {',
+    to: '      if (false) {',
+    expect: 'the wait for a FIRST turn reports progress',
+    test: 'test/transport.test.mjs',
+  },
+  {
     name: 'the scanner stops ranking and takes document order',
     file: 'extension/scan.js',
     from: '  candidates.sort((a, b) => b.rank - a.rank);',

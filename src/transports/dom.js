@@ -54,7 +54,20 @@ export const SELECTORS = {
     composer: ['[data-testid="composer"]', 'textarea[placeholder]', 'div[contenteditable="true"]', 'form textarea'],
     send: ['[data-testid="send-button"]', 'button[type="submit"]', 'button[aria-label*="Send" i]'],
     stop: ['[data-testid="stop-button"]', 'button[aria-label*="Stop" i]'],
-    turns: ['[data-role="assistant"]', '[data-message-role="assistant"]', '.assistant-message'],
+    /*
+     * UNVALIDATED against live Arena markup -- see the run of 2026-08-08
+     * 17:10, where the reply was visibly on screen and none of these matched,
+     * so the transport reported "produced no reply". The list is widened with
+     * the conventional patterns, but widening a guess is not the fix: the fix
+     * is that a total miss is now DIAGNOSED in ~90s by name (`selector-miss`)
+     * instead of being waited out for four hours as if the page were slow.
+     * Run a surface scan and read `selectorCheck` to close this properly.
+     */
+    turns: [
+      '[data-role="assistant"]', '[data-message-role="assistant"]', '[data-message-author-role="assistant"]',
+      '[data-testid*="assistant" i]', '[data-testid*="message" i]',
+      '.assistant-message', '[class*="assistant" i]', '[class*="markdown" i]',
+    ],
   },
   reviewer: {
     composer: ['#chat-input', 'textarea#chat-input', 'div[contenteditable="true"]', 'form textarea'],
@@ -92,6 +105,21 @@ export const DEFAULTS = {
   blindQuietMs: 8_000,
   /** Wait for the composer to appear before giving up. */
   composerMs: 15_000,
+  /**
+   * How long to wait for the FIRST sign that a reply exists before concluding
+   * that the fault is ours, not the model's.
+   *
+   * This is not a completion budget -- it is a diagnosis budget. If, this long
+   * after submitting, the page reports no turns, no text and no busy state,
+   * then we are not watching a slow answer; we are not watching anything. The
+   * reply may well be on screen. Waiting out a four-hour budget to say "no
+   * reply" in that situation is the transport blaming the model for its own
+   * blindness, which is exactly what happened on Arena on 2026-08-08.
+   *
+   * 90s is above any plausible time-to-first-token and far below the point
+   * where a human gives up and presses retry (they pressed it at 6.5 minutes).
+   */
+  firstTurnMs: 90_000,
 };
 
 export class TransportError extends Error {
@@ -179,13 +207,65 @@ export class DomTransport {
     await this.page.click(surface, 'send');
 
     /* -- 3. wait for a new turn to appear ------------------------------- */
+    /*
+     * TWO DIFFERENT FAILURES LIVE HERE, AND THEY NEED DIFFERENT ANSWERS.
+     *
+     *   the model is slow          -> wait. That is what the long budget is for.
+     *   our selectors do not match -> waiting cannot help. Say so, fast.
+     *
+     * This phase used to be a single `until()` against the full deadline, and
+     * it emitted nothing at all while it ran. With the engineer's four-hour
+     * budget that combination produced the worst possible behaviour: a reply
+     * that WAS on screen was declared absent, four hours later, with a silent
+     * Activity Log in between. The heartbeat added in the previous fix lived
+     * only in `awaitCompletion`, which this phase never reached.
+     *
+     * The distinguishing evidence is whether the page shows ANY sign of life:
+     * a turn, any text, or a busy indicator. If nothing at all is observable
+     * after `firstTurnMs`, the honest diagnosis is that we cannot see the
+     * page, not that the page is empty.
+     */
+    const firstTurnBy = Math.min(startedAt + this.config.firstTurnMs, deadline);
+    let sawAnything = false;
+    let progressAt = 0;
+
     const appeared = await this.until(async () => {
       const s = await this.readState(surface);
+      if (s.busy || s.turns > 0 || s.lastText) sawAnything = true;
+
+      /*
+       * Named `waited`, not `elapsed`, purely so it is not textually identical
+       * to the streaming phase's line. Two identical statements in one file
+       * make line-oriented mutation testing ambiguous -- the harness patched
+       * the first occurrence and the wrong test failed, which is how a real
+       * defect could hide behind a green run.
+       */
+      const waited = this.now() - startedAt;
+      if (waited - progressAt >= 60_000) {
+        progressAt = waited;
+        this.emit('response-progress', {
+          surface, elapsedMs: waited, chars: s.lastText.length, busy: s.busy, silentMs: waited, phase: 'awaiting-first-turn',
+        });
+      }
+
+      /*
+       * Blind, not patient. Thrown from inside the predicate so it beats the
+       * outer deadline rather than being masked by it.
+       */
+      if (!sawAnything && this.now() >= firstTurnBy) {
+        throw new TransportError('failed',
+          `${surface} showed no turns, no text and no activity ${Math.round(this.config.firstTurnMs / 1000)}s after submitting — ` +
+          `the reply may be on screen but unreadable: none of the ${surface} "turns" selectors matched`,
+          { phase: 'selector-miss', tried: SELECTORS[surface]?.turns, sawBusy: false });
+      }
+
       return s.turns > baseTurns || (s.lastText && s.lastText !== baseText);
     }, deadline, this.config.pollMs);
 
     if (!appeared) {
-      throw new TransportError('timed-out', `${surface} produced no reply within ${timeoutMs}ms`, { phase: 'no-turn' });
+      throw new TransportError('timed-out', `${surface} produced no reply within ${timeoutMs}ms`, {
+        phase: 'no-turn', sawAnything,
+      });
     }
     this.emit('response-started', { surface });
 
@@ -252,6 +332,15 @@ export class DomTransport {
           chars: s.lastText.length,
           busy: s.busy,
           silentMs: this.now() - lastChange,
+          /*
+           * Tagged so the two waits are distinguishable. Both phases emit the
+           * same event type, and without a tag a test asserting "the streaming
+           * wait reports progress" is satisfied by a heartbeat from the
+           * first-turn wait -- which let a mutation of THIS line be caught by
+           * the wrong test. The sabotage harness reported that overlap; the
+           * tag restores a one-to-one mapping between defect and test.
+           */
+          phase: 'streaming',
         });
       }
 

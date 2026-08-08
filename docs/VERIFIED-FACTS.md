@@ -109,12 +109,51 @@ from an old bookmark reports the old host until it navigates.
 
 ---
 
+## Confirmed by a real run: Arena's reply selectors do NOT match
+
+**Run `orchestrator-202608081710-9xm`, 2026-08-08.** The engineer reply was
+visible on screen. The extension reported *"engineer produced no reply"*.
+
+This upgrades a suspected risk to a **measured fact**: none of the `engineer`
+`turns` selectors match Arena's rendered assistant messages. Paste and submit
+DO work (events 000018/000019), so the composer and send selectors are good and
+only the read path is broken.
+
+The run also exposed a worse structural bug behind it. `send()` has two waits:
+phase 3 waits for a first turn to appear, phase 4 waits for it to settle. The
+four-hour engineer budget and the progress heartbeat had both been applied to
+phase 4 only. So a selector miss — a bug that is *instantly* diagnosable — was
+treated as a slow model and waited out for the entire four hours, emitting
+nothing. The user pressed retry at 6.5 minutes, which is the correct response
+to an interface that appears frozen.
+
+Fixed by separating the two questions:
+
+| Question | Budget | Failure |
+|---|---|---|
+| Can we see the page at all? | `firstTurnMs` = 90 s | `phase: 'selector-miss'`, names the selectors tried |
+| Is the model still working? | `timeoutMs` = 4 h, `silenceMs` = 15 min | `phase: 'silent'` / `'never-settled'` |
+
+Any sign of life — a turn, any text, or a busy indicator — suspends the 90 s
+diagnosis budget, so a model that thinks for three minutes before its first
+token still gets its full four hours. Both properties are asserted by tests
+that were each verified to fail when the guard is removed.
+
+Measured, with a virtual clock: the blind case now fails in **90 s instead of
+4 hours**, with a message naming the selectors rather than blaming the model.
+
+---
+
 ## Still unverifiable from here
 
 - **DOM selectors** (`#prompt-textarea`, `[data-testid="send-button"]`…) —
   I have no browser, so these remain best-effort. Contained by design: several
-  per role, a loud typed error naming which selector missed, and completion
-  detection that waits longer when it cannot read the busy state.
+  per role, a loud typed error naming which selector missed, completion
+  detection that waits longer when it cannot read the busy state, and now a
+  90-second blindness check that turns a silent multi-hour hang into a named
+  fault. The Arena `turns` list has been widened with the conventional
+  patterns, but **widening a guess is not a fix** — the real fix needs a
+  surface scan of a live Arena reply and a read of its `selectorCheck` block.
 - **Whether driving these sites breaches their ToS** — stated as a risk in the
   README. The adapter boundary exists so an official-API transport can replace
   the DOM one without touching the engine.
