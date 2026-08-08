@@ -272,21 +272,25 @@ if (!problems.length) {
 {
   const stale = [];
 
-  for (const f of readdirSync('src/core').filter((x) => x.endsWith('.js'))) {
-    const shipped = join(ROOT, 'core', f);
-    if (!existsSync(shipped)) { stale.push(`core/${f} is missing from dist/`); continue; }
-    if (readFileSync(join('src/core', f), 'utf8') !== readFileSync(shipped, 'utf8')) {
-      stale.push(`core/${f} differs from src/core/${f}`);
+  for (const tree of ['core', 'adapters', 'transports']) {
+    const dir = join('src', tree);
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir).filter((x) => x.endsWith('.js'))) {
+      const shipped = join(ROOT, tree, f);
+      if (!existsSync(shipped)) { stale.push(`${tree}/${f} is missing from dist/`); continue; }
+      if (readFileSync(join(dir, f), 'utf8') !== readFileSync(shipped, 'utf8')) {
+        stale.push(`${tree}/${f} differs from src/${tree}/${f}`);
+      }
     }
   }
 
-  const REWRITE = /(['"])\.\.\/src\/core\/([A-Za-z0-9_.-]+\.js)\1/g;
+  const REWRITE = /(['"])\.\.\/src\/(core|adapters|transports)\/([A-Za-z0-9_.-]+\.js)\1/g;
   for (const f of readdirSync('extension')) {
     if (f === 'manifest.template.json' || f.endsWith('.md')) continue;
     const shipped = join(ROOT, f);
     if (!existsSync(shipped)) { stale.push(`${f} is missing from dist/`); continue; }
     const expected = f.endsWith('.js')
-      ? readFileSync(join('extension', f), 'utf8').replace(REWRITE, (_m, q, n) => `${q}./core/${n}${q}`)
+      ? readFileSync(join('extension', f), 'utf8').replace(REWRITE, (_m, q, tree, n) => `${q}./${tree}/${n}${q}`)
       : readFileSync(join('extension', f), 'utf8');
     if (expected !== readFileSync(shipped, 'utf8')) stale.push(`${f} differs from extension/${f}`);
   }

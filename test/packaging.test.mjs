@@ -239,21 +239,54 @@ test('an unknown command is refused without killing the worker', async () => {
   assert.ok('events' in after, 'the worker still works afterwards');
 });
 
-test('Start refuses honestly while no AI adapters exist', async () => {
+test('Start refuses honestly when there is no project yet', async () => {
   /*
-   * A Start button that silently does nothing is the hidden-background-process
-   * failure in miniature: the user cannot tell whether it is working quietly
-   * or broken.
+   * The adapters now exist, so the old "no adapters" refusal is gone —
+   * replaced by the one that is now true. The principle is unchanged and is
+   * the point of the test: a Start button that silently does nothing is the
+   * hidden-background-process failure in miniature. The refusal must be
+   * SPECIFIC and it must be logged.
    */
   const { registered } = shim();
   await loadWorker();
   const reply = await ask(registered, { kind: 'start' });
+
   assert.equal(reply.ok, false);
-  assert.equal(reply.why, 'no adapters');
+  assert.equal(reply.why, 'no project');
 
   const state = await ask(registered, { kind: 'state' });
   const err = state.events.find((e) => e.status === 'error');
-  assert.match(err.description, /No AI adapters are registered/);
+  assert.match(err.description, /No project has been set up/);
+});
+
+test('Start refuses when the environment cannot be bound', async () => {
+  /*
+   * With a project but no usable tabs, the environment contract must refuse
+   * rather than improvise — and say which surface is missing.
+   */
+  const { registered } = shim();
+  globalThis.chrome.tabs = { query: async () => [] };
+  await loadWorker();
+
+  const reply = await ask(registered, {
+    kind: 'start',
+    setup: { mode: 'new', prompt: 'A CSV export feature for the reporting dashboard' },
+  });
+  assert.equal(reply.ok, false);
+  assert.equal(reply.why, 'environment');
+
+  const state = await ask(registered, { kind: 'state' });
+  assert.ok(state.events.some((e) => e.type === 'environment-drift'));
+});
+
+test('the worker exposes analytics, history and replay', async () => {
+  const { registered } = shim();
+  await loadWorker();
+  for (const kind of ['analytics', 'history', 'replay']) {
+    const out = await ask(registered, { kind });
+    assert.ok(out && typeof out === 'object', `${kind} returned nothing`);
+    assert.equal(out.ok, undefined, `${kind} returned an error envelope: ${JSON.stringify(out).slice(0, 120)}`);
+  }
 });
 
 /* ------------------------------------------------------------ packaging - */

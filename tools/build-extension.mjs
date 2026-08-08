@@ -52,10 +52,34 @@ mkdirSync(join(OUT, 'core'), { recursive: true });
  * here would mean the shipped engine is not the tested engine, which is the
  * kind of divergence that produces a bug reproducible only after packaging.
  */
-const coreFiles = readdirSync('src/core').filter((f) => f.endsWith('.js'));
-for (const f of coreFiles) {
-  writeFileSync(join(OUT, 'core', f), readFileSync(join('src/core', f)));
+/*
+ * EVERY src/ subtree the extension imports, not just core.
+ *
+ * The first version copied `src/core` only. When adapters and transports were
+ * added the build happily produced a dist/ whose background.js imported paths
+ * that did not exist -- and `check-loadable.mjs` caught it, which is the
+ * entire reason that checker exists. Listing the trees explicitly (rather than
+ * globbing src/) keeps the shipped surface deliberate: anything new has to be
+ * added here on purpose.
+ */
+const TREES = ['core', 'adapters', 'transports'];
+const coreFiles = [];
+const CROSS = /(['"])\.\.\/(core|adapters|transports)\/([A-Za-z0-9_.-]+\.js)\1/g;
+for (const tree of TREES) {
+  const dir = join('src', tree);
+  if (!existsSync(dir)) continue;
+  mkdirSync(join(OUT, tree), { recursive: true });
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.js'))) {
+    /*
+     * `../adapters/base.js` from inside src/adapters resolves identically in
+     * dist/adapters, so cross-tree imports survive the move unchanged. Copied
+     * verbatim so the shipped engine is byte-for-byte the tested engine.
+     */
+    writeFileSync(join(OUT, tree, f), readFileSync(join(dir, f)));
+    coreFiles.push(`${tree}/${f}`);
+  }
 }
+void CROSS;
 
 /* ------------------------------------------------------ extension files -- */
 
@@ -66,7 +90,7 @@ for (const f of coreFiles) {
  * would silently mangle a string that merely looked like a path, and the
  * failure would appear at runtime in a service worker with no console open.
  */
-const REWRITE = /(['"])\.\.\/src\/core\/([A-Za-z0-9_.-]+\.js)\1/g;
+const REWRITE = /(['"])\.\.\/src\/(core|adapters|transports)\/([A-Za-z0-9_.-]+\.js)\1/g;
 
 let rewrites = 0;
 const extFiles = readdirSync('extension');
@@ -75,9 +99,9 @@ for (const f of extFiles) {
   if (f === 'manifest.template.json' || f.endsWith('.md')) continue; // template is emitted below
   if (f.endsWith('.js')) {
     const before = readFileSync(src, 'utf8');
-    const after = before.replace(REWRITE, (_m, q, name) => {
+    const after = before.replace(REWRITE, (_m, q, tree, name) => {
       rewrites++;
-      return `${q}./core/${name}${q}`;
+      return `${q}./${tree}/${name}${q}`;
     });
     writeFileSync(join(OUT, f), after);
   } else {
@@ -275,6 +299,7 @@ if (problems.length) {
   process.exit(1);
 }
 
-const files = readdirSync(OUT).length + readdirSync(join(OUT, 'core')).length;
-console.log(`ok: dist/ built — ${files} files, ${coreFiles.length} core modules, ${rewrites} imports rewritten`);
+const files = readdirSync(OUT).length + TREES.reduce((n, t) =>
+  n + (existsSync(join(OUT, t)) ? readdirSync(join(OUT, t)).length : 0), 0);
+console.log(`ok: dist/ built — ${files} files, ${coreFiles.length} src modules, ${rewrites} imports rewritten`);
 console.log('   load it with chrome://extensions → Developer mode → Load unpacked → select dist/');

@@ -31,6 +31,17 @@ import { composeFirstPrompt } from '../src/core/protocol.js';
 import { initialScope, validateSetup } from '../src/core/modes.js';
 import { emptyMemory } from '../src/core/types.js';
 import { snapshotEnvironment, EXPECTED_HOSTS } from './probe.js';
+import { createPageReader } from './dom-page.js';
+import { DomTransport } from '../src/transports/dom.js';
+import { ManagerAdapter } from '../src/adapters/manager.js';
+import { EngineerAdapter } from '../src/adapters/engineer.js';
+import { ReviewerAdapter } from '../src/adapters/reviewer.js';
+import { Runner } from '../src/core/runner.js';
+import { ProjectStore } from '../src/core/projectstore.js';
+import { ChromeKeyValue } from './kvstore.js';
+import { bind } from '../src/core/environment.js';
+import { analyse } from '../src/core/analytics.js';
+import { replay, narrate } from '../src/core/replay.js';
 import { scanTab } from './scan.js';
 import { ScanBudget, boundCapture, describeCapture, diffCaptures, renderCapture } from '../src/core/surface.js';
 
@@ -49,6 +60,9 @@ const reason = (err) => String(err?.message || err || 'unknown error');
 
 const sink = new IdbLogSink();
 const store = new ChromeStore();
+const projectStore = new ProjectStore({ kv: new ChromeKeyValue() });
+let runner = null;
+let binding = null;
 const budget = new ScanBudget();
 /** Last capture per surface, so a repeat failure can be logged as a diff. */
 const lastCapture = new Map();
@@ -95,6 +109,19 @@ chrome.runtime.onInstalled.addListener(() => {
  * renders "no events" over a run that has been going for two hours.
  */
 async function rehydrate() {
+  /*
+   * The project record is loaded on EVERY wake, not only when the log is
+   * empty. An MV3 worker is evicted constantly, and a panel asking for state
+   * after an eviction must see the run that is genuinely in progress -- not an
+   * empty dashboard that looks like the project was lost.
+   */
+  if (!projectStore.project) {
+    try {
+      await projectStore.load();
+    } catch (err) {
+      logger.log('error', { status: 'error', source: 'system', description: `Could not load the project: ${reason(err)}` });
+    }
+  }
   if (logger.live.length > 0) return;
   try {
     const recent = await sink.recent(500);
@@ -199,6 +226,17 @@ function snapshot() {
     startedAt,
     running,
     scans: budget.summary(),
+    /*
+     * The durable record travels with the snapshot so the panel can render a
+     * project after a worker eviction without a second round trip -- the
+     * panel polls, and a second call would double the traffic for data that
+     * changes at the same moments.
+     */
+    project: projectStore.project,
+    run: projectStore.run,
+    iterations: projectStore.iterations,
+    resumability: projectStore.resumability(),
+    diagnostics: projectStore.diagnostics,
   };
 }
 
@@ -237,26 +275,115 @@ function notify(title, message) {
   });
 }
 
-async function ensureOrchestrator(setup = null) {
-  if (orch) return orch;
+/**
+ * Build the real runner: adapters over a DOM transport, bound to the tabs the
+ * user already had open.
+ *
+ * The binding is captured at this moment and held for the run, which is what
+ * makes "the tab changed" detectable -- see src/core/environment.js.
+ */
+async function ensureRunner(setup = null) {
+  if (runner) return runner;
+
   const { config = {} } = await chrome.storage.local.get('config');
-  orch = new Orchestrator({
-    // Adapters are registered here once they exist; until then the extension
-    // has no AI transport and Start will report that honestly rather than
-    // pretending to run.
-    manager: null,
-    engineer: null,
-    reviewer: null,
-    store,
+  const snapshot = await snapshotEnvironment();
+  const required = config.reviewerEnabled ? ['manager', 'engineer', 'reviewer'] : ['manager', 'engineer'];
+  binding = bind(snapshot, { require: required, hosts: EXPECTED_HOSTS });
+
+  const page = createPageReader(() => binding);
+  const transport = new DomTransport({
+    page,
+    config: { timeoutMs: config.timeoutMs ?? 300_000 },
+    onEvent: (e) => logger.log(mapTransportEvent(e.type), {
+      source: e.surface === 'engineer' ? 'arena' : e.surface === 'reviewer' ? 'deepseek' : 'chatgpt',
+      description: describeTransport(e),
+      data: e,
+    }),
+  });
+
+  const adapterEvents = (e) => logger.log(mapAdapterEvent(e.type), {
+    source: e.actor === 'engineer' ? 'arena' : e.actor === 'reviewer' ? 'deepseek' : 'chatgpt',
+    status: e.type.includes('failed') || e.ok === false ? 'error' : 'success',
+    iteration: e.iteration ?? null,
+    durationMs: e.durationMs ?? null,
+    description: describeAdapter(e),
+    data: e,
+  });
+
+  runner = new Runner({
+    manager: new ManagerAdapter({ transport, onEvent: adapterEvents }),
+    engineer: new EngineerAdapter({ transport, onEvent: adapterEvents }),
+    reviewer: config.reviewerEnabled
+      ? new ReviewerAdapter({ transport, onEvent: adapterEvents })
+      : null,
+    store: projectStore,
+    environment: {
+      async check() {
+        const snap = await snapshotEnvironment();
+        const { verify } = await import('../src/core/environment.js');
+        return verify(binding, snap);
+      },
+    },
     config,
     onEvent: bridgeToLogger(logger),
   });
-  await orch.load(setup ? initialScope(setup) : '', setup?.mode || 'new');
+  orch = runner.orchestrator;
   logger.log('state-restored', {
     source: 'system',
-    description: `Project memory loaded${setup ? ` — mode "${setup.mode}"` : ''}`,
+    description: `Runner ready${setup ? ` — mode "${setup.mode}"` : ''}`,
   });
-  return orch;
+  return runner;
+}
+
+/* Event name translation, so the Activity Log speaks one vocabulary. */
+const TRANSPORT_EVENTS = {
+  'prompt-pasted': 'prompt-pasted',
+  'prompt-submitted': 'prompt-submitted',
+  'response-started': 'awaiting-response',
+  'response-complete': 'response-received',
+  'response-settled': 'response-received',
+  'waiting-for-idle': 'awaiting-response',
+};
+const ADAPTER_EVENTS = {
+  'prompt-sent': 'prompt-submitted',
+  'response-received': 'response-received',
+  'prompt-failed': 'error',
+  'response-validated': 'evidence-collected',
+  'schema-reprompt': 'step-retried',
+  'execution-requested': 'task-started',
+  'execution-completed': 'task-complete',
+  'response-malformed': 'error',
+  'report-contradiction': 'error',
+  'evidence-recovered': 'evidence-collected',
+};
+const mapTransportEvent = (t) => TRANSPORT_EVENTS[t] ?? 'user-action';
+const mapAdapterEvent = (t) => ADAPTER_EVENTS[t] ?? 'user-action';
+
+function describeTransport(e) {
+  switch (e.type) {
+    case 'prompt-pasted': return `Pasted ${e.chars} characters into the ${e.surface} composer`;
+    case 'prompt-submitted': return `Submitted the prompt to ${e.surface}`;
+    case 'response-started': return `${e.surface} began responding`;
+    case 'response-complete': return `${e.surface} replied (${e.chars} characters)`;
+    case 'waiting-for-idle': return `Waiting for ${e.surface} to finish a previous response`;
+    default: return e.type;
+  }
+}
+
+function describeAdapter(e) {
+  switch (e.type) {
+    case 'prompt-sent': return `Sent the ${e.what} request${e.attempt ? ` (attempt ${e.attempt + 1})` : ''}`;
+    case 'response-received': return `Received ${e.chars} characters in ${Math.round((e.durationMs ?? 0) / 1000)}s`;
+    case 'prompt-failed': return `${e.what} failed: ${e.error}`;
+    case 'response-validated': return e.ok
+      ? `The ${e.what} validated${e.dropped?.length ? ` (dropped: ${e.dropped.join(', ')})` : ''}`
+      : `The ${e.what} did not validate: ${(e.problems || []).join('; ')}`;
+    case 'schema-reprompt': return `Re-asking with the schema error attached`;
+    case 'execution-completed': return `Arena finished: ${e.taskStatus}, ${e.files} file(s), evidence: ${(e.evidence || []).join(', ')}`;
+    case 'report-contradiction': return `Report contradicts its own numbers: ${e.message}`;
+    case 'evidence-recovered': return `Recovered ${e.kind} evidence from the raw output`;
+    default: return e.type;
+  }
 }
 
 const COMMANDS = {
@@ -268,29 +395,42 @@ const COMMANDS = {
   async start(msg = {}) {
     if (running) return { ok: false, why: 'already running' };
     const setup = msg.setup || pendingSetup;
-    const o = await ensureOrchestrator(setup);
-    if (!o.manager || !o.engineer) {
+
+    if (!projectStore.project) {
+      if (!setup) {
+        logger.log('error', {
+          status: 'error',
+          description: 'No project has been set up yet — choose a workflow on the landing screen first.',
+        });
+        broadcast();
+        return { ok: false, why: 'no project' };
+      }
+      await projectStore.createProject({ scope: initialScope(setup), mode: setup.mode, name: setup.projectName });
+      await projectStore.startRun({ config: (await chrome.storage.local.get('config'))?.config ?? {}, mode: setup.mode });
+    }
+
+    let r;
+    try {
+      r = await ensureRunner(setup);
+    } catch (err) {
       /*
-       * HONEST REFUSAL RATHER THAN A SILENT NO-OP.
-       *
-       * The adapters are not written yet. A Start button that does nothing is
-       * the "hidden background process" failure in miniature: the user presses
-       * it, nothing happens, and they cannot tell whether it is working
-       * silently or broken.
+       * A binding failure here is the environment contract doing its job: the
+       * tabs are not what they were. Reported, never worked around.
        */
-      logger.log('error', {
+      logger.log('environment-drift', {
         status: 'error',
-        description: 'No AI adapters are registered yet — the extension cannot drive ChatGPT or Arena.',
-        data: { remedy: 'This build ships the engine, logging and UI. Adapters are the next milestone.' },
+        description: `Cannot start: ${reason(err)}`,
+        data: { problems: err?.problems ?? null },
       });
       broadcast();
-      return { ok: false, why: 'no adapters' };
+      return { ok: false, why: 'environment', problems: err?.problems ?? null };
     }
+
     running = true;
     startedAt = Date.now();
     try {
-      const verdict = await o.run();
-      notify('Workflow finished', `${verdict.why}. The run is stopped; open the panel for the session summary.`);
+      const verdict = await r.start();
+      notify('Workflow finished', `${verdict.why}. Open the panel for the session summary.`);
       return verdict;
     } finally {
       running = false;
@@ -396,6 +536,56 @@ const COMMANDS = {
     logger.log('log-exported', { source: 'user', description: `Exported ${all.length} events` });
     broadcast();
     return { ok: true, events: all.length };
+  },
+
+  /** Analytics for the dashboard. Derived; never fabricated. */
+  async analytics() {
+    return analyse(projectStore.iterations, {
+      run: projectStore.run,
+      events: logger.live,
+    });
+  },
+
+  /** Iteration history, for the history view. */
+  async history() {
+    return {
+      project: projectStore.project,
+      run: projectStore.run,
+      iterations: projectStore.iterations,
+      runs: await projectStore.listRuns(),
+      state: projectStore.state(),
+      resumability: projectStore.resumability(),
+      diagnostics: projectStore.diagnostics,
+    };
+  },
+
+  /** Replay a stored session without contacting anything. */
+  async replay() {
+    await logger.flush();
+    /*
+     * Fall back to the LIVE view when durable storage is unavailable.
+     *
+     * Replay's whole purpose is inspecting a run after the fact, and the
+     * moment a user most wants it is when something went wrong -- which is
+     * correlated with storage having failed. Returning an error envelope then
+     * would deny them the in-memory events they still have. Degraded is
+     * reported, not silently substituted.
+     */
+    let events;
+    let durable = true;
+    try {
+      events = await sink.all();
+    } catch (err) {
+      durable = false;
+      events = logger.live;
+      logger.log('error', {
+        status: 'warning',
+        source: 'system',
+        description: `Replaying from memory only — durable log unavailable: ${reason(err)}`,
+      });
+    }
+    const { final, checkpoints } = replay(events, { keepFrames: false });
+    return { final, checkpoints, narrative: narrate(events), events: events.length, durable };
   },
 
   async 'session-summary'() {
