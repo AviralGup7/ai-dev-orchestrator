@@ -7,7 +7,12 @@
   "scripts": {
     "test": "node --test test/",
     "test:ci": "node tools/ci-test.mjs",
-    "purity": "node tools/check-purity.mjs"
+    "purity": "node tools/check-purity.mjs",
+    "env-safety": "node tools/check-env-safety.mjs",
+    "sabotage": "node tools/sabotage.mjs",
+    "check": "npm run purity && npm run env-safety && npm test"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

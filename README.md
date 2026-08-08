@@ -9,9 +9,11 @@ Not a coding assistant. Not a prompt-copier. The distinguishing claim is
 **judgement**: it decides what to work on next, notices when it is going in
 circles, and stops when it is actually done.
 
-> **Status: walking skeleton.** The orchestration engine is complete and
-> tested — state machine, memory, scoring, loop detection, stop conditions.
-> The AI adapters are next. See [`docs/SPEC.md`](docs/SPEC.md).
+> **Status: walking skeleton + environment contract.** The orchestration engine
+> is complete and tested — state machine, memory, scoring, loop detection, stop
+> conditions — and it now refuses to touch anything the user did not prepare
+> for it. The AI adapters are next. See [`docs/SPEC.md`](docs/SPEC.md) and
+> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md).
 
 ## Roles
 
@@ -48,6 +50,21 @@ not sufficient.
 is what makes the roadmap's local companion a *new adapter* rather than a
 rewrite — and it is enforced by `npm run purity`, not by convention.
 
+**3 · The environment is inherited, never created.**
+
+The tabs are already open, the conversations are already chosen, and the user
+is already signed in. The orchestrator switches focus between those tabs, types
+into them, and reads them back. It **cannot** open a tab, close one, start a
+new chat, sign in, or navigate — those verbs are not in the allow-list, and
+`npm run env-safety` fails the build if the underlying Chrome APIs appear in
+the source at all.
+
+When the environment stops matching what was bound — a tab closed, a
+conversation switched, a session expired — the run **pauses, logs the exact
+problem with a remedy, tells the user, and waits.** It never recovers by
+changing the user's browser. Details and the reasoning:
+[`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md).
+
 ## Layout
 
 ```
@@ -58,16 +75,24 @@ src/core/        the engine — pure, no browser, runs in Node
   stop.js          when to halt, and why
   orchestrator.js  the loop
   store.js         persistence (the one documented browser seam)
+  actions.js       the allow-list of things it may do to your browser
+  environment.js   bind() / verify() — is this still the prepared environment?
+  guard.js         the only route from the engine to a transport
+  journal.js       the copy-pasteable markdown run log
 src/adapters/    per-AI request/response shaping
 src/transports/  the only layer that knows about tabs
-docs/SPEC.md     the specification
+docs/SPEC.md          the specification
+docs/ENVIRONMENT.md   the pre-initiated environment contract
 ```
 
 ## Commands
 
 ```
-npm test        55 tests, no browser required
-npm run purity  fails if the engine grows a browser dependency
+npm test            94 tests, no browser required
+npm run purity      fails if the engine grows a browser dependency
+npm run env-safety  fails if anything can open/close/navigate a tab
+npm run sabotage    breaks the code 15 ways; every break must fail a named test
+npm run check       purity + env-safety + tests
 ```
 
 ## A risk worth stating

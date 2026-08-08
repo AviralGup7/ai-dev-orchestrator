@@ -122,6 +122,18 @@ export const RUN_STATUS = /** @type {const} */ ([
   'idle',
   'running',
   'paused',        // by the user, or awaiting approval
+  /*
+   * `blocked` is NOT `failed`, and the distinction is load-bearing.
+   *
+   * The environment the user prepared has changed -- a tab closed, a
+   * conversation switched, a session expired. Nothing is broken and no work is
+   * lost; the run simply cannot proceed until a human puts the environment
+   * back. Recording it as `failed` would be wrong twice: it reads as "the
+   * orchestrator crashed" in the log, and `shouldStop` treats `failed` as a
+   * TERMINAL condition, so resuming after the user fixed the tab would be
+   * refused by the stop check.
+   */
+  'blocked',       // the pre-initiated environment drifted; awaiting the user
   'stopped',       // a stop condition was satisfied
   'failed',        // unrecoverable; state preserved for inspection
 ]);
@@ -167,6 +179,15 @@ export function emptyMemory(scope = '') {
       stagnation: false,
       signals: [],
     },
+
+    /*
+     * Why the run is blocked, if it is. Persisted -- NOT held in a variable --
+     * because the blocking event is usually "the user closed a tab", and the
+     * next thing they do is often reload the extension. A reason that lived
+     * only in memory would vanish exactly when it is needed, leaving a stopped
+     * run with no explanation.
+     */
+    block: null,            // { at, problems, detail }
   };
 }
 
