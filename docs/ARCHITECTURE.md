@@ -67,10 +67,16 @@ known wastes a round trip and lets it skip the baseline entirely.
 `Project` outlives everything · `Run` is Start→stop · `Session` is one worker
 lifetime · `Iteration` is one loop.
 
-The distinction is load-bearing rather than tidy: an MV3 worker is evicted after
-~30s idle and this orchestrator spends most of its life waiting, so **sessions
-end constantly, mid-run, as normal operation**. Conflating session and run would
-make every eviction look like the run ending.
+The distinction is load-bearing rather than tidy. Chrome's documented rules
+(verified August 2026): a worker is terminated after **30s with no event or
+extension API call**, after any **single event exceeding 5 minutes**, and when a
+`fetch()` takes over 30s. This orchestrator spends most of its life waiting, so
+**sessions end constantly, mid-run, as normal operation**. Conflating session and
+run would make every eviction look like the run ending.
+
+The 5-minute rule is why `start` returns immediately and the run proceeds as a
+detached task — awaiting a multi-hour loop inside one `onMessage` handler would
+be killed at five minutes, every time.
 
 ## Storage, split by access pattern
 

@@ -153,6 +153,7 @@ docs/ADAPTERS.md      the adapter contract and role boundaries
 docs/EVENTS.md        the event taxonomy
 docs/RECOVERY.md      the failure recovery contract
 docs/DEVELOPMENT.md   how to work on this
+docs/VERIFIED-FACTS.md  platform claims checked against primary sources
 ```
 
 ## Installing

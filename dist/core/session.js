@@ -18,12 +18,12 @@
  *
  * WHY THIS DISTINCTION IS LOAD-BEARING AND NOT BOOKKEEPING
  * --------------------------------------------------------
- * An MV3 service worker is evicted after ~30 seconds idle, and this
- * orchestrator spends most of its life waiting for an AI. So sessions end
- * constantly, mid-run, as normal operation. If session and run were the same
- * object, every eviction would look like a run ending -- and "why did it
- * stop?" would have no answer, because nothing stopped; the browser just went
- * to sleep.
+ * An MV3 service worker is evicted after 30 seconds with no event or extension
+ * API call, and this orchestrator spends most of its life waiting for an AI.
+ * So sessions end constantly, mid-run, as normal operation. If session and run
+ * were the same object, every eviction would look like a run ending -- and
+ * "why did it stop?" would have no answer, because nothing stopped; the
+ * browser just went to sleep.
  *
  * The §4 questions each map to a field here, and the mapping is the design:
  *

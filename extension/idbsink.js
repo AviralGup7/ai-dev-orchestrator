@@ -2,10 +2,14 @@
  * THE DURABLE LOG SINK, for real.
  *
  * Tier 1 of the two-tier log. This is the reason "never silently discard
- * events" is achievable at all: `chrome.storage.local` is capped at 10 MB and
- * is a key/value store that must be rewritten wholesale, which for a
- * 60,000-event log means reading and re-serialising megabytes on every flush.
- * IndexedDB appends, and with `unlimitedStorage` it is bounded by disk.
+ * events" is achievable at all: `chrome.storage.local` is capped at 10 MB (5 MB before
+ * Chrome 114) and is a key/value store that must be rewritten wholesale,
+ * which for a 60,000-event log means re-serialising megabytes on every flush.
+ * `unlimitedStorage` lifts the quota, but the underlying implementation slows
+ * noticeably past ~50 MB. IndexedDB appends and is bounded by disk, so it is
+ * the right home for an append-only log regardless of the quota.
+ *
+ * Verified against developer.chrome.com, August 2026.
  *
  * It lives in `extension/` rather than `src/core/` because IndexedDB is a
  * browser API and the core is contractually browser-free. The engine gets the

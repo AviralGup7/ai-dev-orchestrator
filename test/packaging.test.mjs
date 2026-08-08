@@ -752,3 +752,110 @@ test('the worker can report what it sees without changing anything', async () =>
   assert.ok(d.candidates.some((c) => c.url.includes('arena.ai')));
   assert.ok(d.expectedHosts.engineer.includes('arena.ai'));
 });
+
+/* =================================== verified platform facts (session 10) */
+
+test('ChatGPT conversation URLs resolve, including custom GPTs', async () => {
+  /*
+   * Verified against live URL shapes, August 2026. The custom-GPT form
+   * (/g/<gpt>/c/<uuid>) was previously matched by the bare /c/ pattern only by
+   * luck of ordering; it is now explicit and first.
+   */
+  const { snapshotEnvironment } = await import('../extension/probe.js');
+  const cases = [
+    ['https://chatgpt.com/c/68f21abc-1111', '68f21abc-1111'],
+    ['https://chatgpt.com/g/g-abc123-helper/c/9f8e7d6c', '9f8e7d6c'],
+    ['https://chat.openai.com/c/legacy-uuid-1', 'legacy-uuid-1'],
+  ];
+  for (const [url, expected] of cases) {
+    const snap = await snapshotEnvironment({ query: async () => [{ id: 11, windowId: 1, url, title: 'c' }] });
+    assert.equal(snap.surfaces.manager?.conversationId, expected, url);
+  }
+});
+
+test('A SHARED ChatGPT conversation is NOT bindable', async () => {
+  /*
+   * /share/<id> is read-only. Binding to one would produce a run that pastes
+   * prompts into a page that cannot accept them, and the failure would look
+   * like a broken composer selector rather than the wrong tab.
+   */
+  const { snapshotEnvironment } = await import('../extension/probe.js');
+  for (const url of ['https://chatgpt.com/share/abc-123', 'https://chatgpt.com/', 'https://chatgpt.com/?q=hello']) {
+    const snap = await snapshotEnvironment({ query: async () => [{ id: 11, windowId: 1, url, title: 'c' }] });
+    assert.equal(snap.surfaces.manager?.conversationId, null, `${url} must not be bindable`);
+  }
+});
+
+test('THE RUN IS NOT AWAITED INSIDE ONE MESSAGE EVENT', async () => {
+  /*
+   * Chrome terminates a service worker when "a single request, such as an
+   * event or API call, takes longer than 5 minutes to process"
+   * (developer.chrome.com, verified August 2026).
+   *
+   * `Runner.start()` is a multi-hour loop. Awaiting it inside onMessage made
+   * the whole run one event, so Chrome would have killed the worker at five
+   * minutes — mid-iteration, on the first real run. The handler must return
+   * promptly and let the run proceed detached.
+   */
+  const s = scanShim();
+  globalThis.chrome.tabs = {
+    query: async () => [
+      { id: 11, windowId: 1, url: 'https://chatgpt.com/c/abc', title: 'PM', active: true },
+      { id: 22, windowId: 1, url: 'https://arena.ai/w/ws-7', title: 'Arena' },
+    ],
+  };
+  await loadWorker();
+
+  const began = Date.now();
+  const reply = await ask(s.registered, {
+    kind: 'start',
+    setup: { mode: 'new', prompt: 'A CSV export feature for the reporting dashboard' },
+  });
+  const took = Date.now() - began;
+
+  assert.equal(reply.started, true, 'start must acknowledge immediately');
+  assert.ok(took < 2000, `start() blocked for ${took}ms — it must not await the whole run`);
+});
+
+test('the per-response timeout sits UNDER Chrome\'s five-minute ceiling', async () => {
+  /*
+   * 300_000ms sat exactly on the platform limit: a single slow reply raced
+   * Chrome's own kill timer, and which won depended on scheduling noise. A
+   * timeout must be OUR timeout, with our error and our retry.
+   */
+  const { DEFAULT_POLICY } = await import('../src/adapters/base.js');
+  const { DEFAULTS } = await import('../src/transports/dom.js');
+  const CHROME_EVENT_CEILING_MS = 300_000;
+
+  assert.ok(DEFAULT_POLICY.timeoutMs < CHROME_EVENT_CEILING_MS,
+    `adapter timeout ${DEFAULT_POLICY.timeoutMs} must be under ${CHROME_EVENT_CEILING_MS}`);
+  assert.ok(DEFAULTS.timeoutMs < CHROME_EVENT_CEILING_MS,
+    `transport timeout ${DEFAULTS.timeoutMs} must be under ${CHROME_EVENT_CEILING_MS}`);
+  assert.ok(DEFAULT_POLICY.timeoutMs >= 120_000, 'but long enough for a real build-and-test cycle');
+});
+
+test('the keep-alive runs only while a run is in flight', () => {
+  /*
+   * An unconditional keep-alive is the pattern Chrome's own docs warn against
+   * and the Web Store rejects. The heartbeat exists because during a
+   * multi-minute AI wait the orchestrator makes no API calls at all, so the
+   * 30s idle timer is never reset.
+   */
+  const src = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
+  assert.match(src, /function startHeartbeat/);
+  assert.match(src, /if \(!running\) \{ stopHeartbeat\(\); return; \}/,
+    'the heartbeat must stop itself when no run is active');
+  assert.match(src, /stopHeartbeat\(\);\n        await logger\.flush/,
+    'and must be stopped when the run ends');
+});
+
+test('minimum_chrome_version matches the highest API actually used', () => {
+  /*
+   * chrome.sidePanel is Chrome 114, as is the 10 MB storage.local quota.
+   * Claiming a lower minimum would install on browsers where the side panel
+   * silently does not exist.
+   */
+  const manifest = JSON.parse(readFileSync(new URL('../extension/manifest.template.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.minimum_chrome_version, '114');
+  assert.ok(manifest.side_panel, 'the side panel is what sets that floor');
+});

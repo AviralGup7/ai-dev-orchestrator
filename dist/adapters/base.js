@@ -72,7 +72,20 @@ export const DEFAULT_POLICY = {
    * failures is enough evidence to stop and involve a human.
    */
   schemaRetries: 1,
-  timeoutMs: 300_000,
+  /*
+   * 240s, NOT 300s.
+   *
+   * Chrome terminates a service worker when "a single request, such as an
+   * event or API call, takes longer than 5 minutes to process". 300_000ms sat
+   * exactly on that ceiling: a single slow Arena reply would race Chrome's own
+   * kill timer, and which one won would depend on scheduling noise.
+   *
+   * A run is no longer one event (see extension/background.js), so this is now
+   * belt-and-braces rather than the only defence -- but a per-response budget
+   * comfortably under the platform limit means a timeout is OUR timeout, with
+   * our error message and our retry, rather than a silent worker death.
+   */
+  timeoutMs: 240_000,
   /** Backoff between transport retries. Bounded; never a fixed long sleep. */
   backoffMs: 2_000,
 };

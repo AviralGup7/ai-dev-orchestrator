@@ -36,8 +36,23 @@ export const SURFACE_PATTERNS = [
   {
     key: 'manager',
     hosts: ['chatgpt.com', 'chat.openai.com'],
-    // https://chatgpt.com/c/<uuid>   or  /g/<gpt>/c/<uuid>
-    id: [/\/c\/([0-9a-zA-Z-]+)/],
+    /*
+     * Verified against live URL shapes, August 2026:
+     *   https://chatgpt.com/c/<uuid>              a conversation
+     *   https://chatgpt.com/g/<gpt-id>/c/<uuid>   inside a custom GPT
+     *   https://chatgpt.com/share/<uuid>          a shared read-only view
+     *   https://chatgpt.com/?q=...                a prefilled NEW chat
+     *
+     * `chat.openai.com` still resolves and redirects to `chatgpt.com`, so it
+     * is kept: a tab opened from an old bookmark reports the old host until it
+     * navigates.
+     *
+     * `/share/` is deliberately NOT matched. A shared conversation is
+     * read-only -- binding to one would produce a run that pastes prompts into
+     * a page that cannot accept them, and the failure would look like a broken
+     * composer selector rather than the wrong tab.
+     */
+    id: [/\/g\/[^/]+\/c\/([0-9a-zA-Z-]+)/, /\/c\/([0-9a-zA-Z-]+)/],
   },
   {
     key: 'engineer',
@@ -70,9 +85,16 @@ export const SURFACE_PATTERNS = [
   },
   {
     key: 'reviewer',
-    hosts: ['chat.deepseek.com', 'deepseek.com'],
-    // https://chat.deepseek.com/a/chat/s/<id>
+    hosts: ['chat.deepseek.com', 'deepseek.com', 'www.deepseek.com'],
+    /*
+     * https://chat.deepseek.com/a/chat/s/<id> is the observed shape. The
+     * generic fallback is enabled here for the same reason as Arena: the four
+     * hard-coded Arena patterns missed nine of ten plausible URLs and cost a
+     * user four failed rechecks. Betting on someone else's routing scheme is a
+     * bet that keeps losing.
+     */
     id: [/\/chat\/s\/([0-9a-zA-Z-]+)/, /\/a\/chat\/([0-9a-zA-Z-]+)/],
+    generic: true,
   },
 ];
 

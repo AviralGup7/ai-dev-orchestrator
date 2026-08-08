@@ -7,10 +7,22 @@
  *
  * MV3 EVICTION IS THE DESIGN CONSTRAINT
  * -------------------------------------
- * Chrome kills an idle service worker after ~30 seconds. That is not an edge
- * case for this extension, it is the normal condition: the orchestrator spends
- * most of its life waiting for an AI to finish writing. Three consequences,
- * all already handled elsewhere and all load-bearing here:
+ * MV3 SERVICE WORKER LIFETIME -- verified against Chrome's documented rules,
+ * August 2026:
+ *
+ *   - terminated after 30s of inactivity; ANY event or extension API call
+ *     resets that timer (Chrome 110+);
+ *   - terminated when a SINGLE event or API call takes longer than 5 minutes;
+ *   - terminated when a fetch() response takes more than 30s to arrive.
+ *
+ * The second rule is the one that shapes this design: a run must never be a
+ * single awaited event, or Chrome kills it at five minutes. The first is why a
+ * heartbeat is needed while waiting on an AI -- during a multi-minute wait the
+ * orchestrator makes no API calls at all, so the idle timer is not reset.
+ *
+ * Eviction is not an edge case here, it is the normal condition: the
+ * orchestrator spends most of its life waiting for an AI. Three consequences,
+ * all load-bearing:
  *
  *   1. Memory persists at every phase boundary (orchestrator.js), so a restart
  *      resumes rather than restarting the iteration.
@@ -63,6 +75,8 @@ const store = new ChromeStore();
 const projectStore = new ProjectStore({ kv: new ChromeKeyValue() });
 let runner = null;
 let binding = null;
+/** The detached run promise. See the note in `start`. */
+let activeRun = null;
 const budget = new ScanBudget();
 /** Last capture per surface, so a repeat failure can be logged as a diff. */
 const lastCapture = new Map();
@@ -97,6 +111,34 @@ let pendingSetup = null;
 /* Clicking the icon opens the side panel next to the current tab. It does not
    create, close or navigate a tab -- see docs/ENVIRONMENT.md. */
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false }).catch(() => {});
+
+/**
+ * KEEP-ALIVE, SCOPED TO ACTUAL WORK.
+ *
+ * Chrome resets the 30s idle timer on any extension API call (Chrome 110+).
+ * While waiting minutes for an AI reply the orchestrator makes no API calls at
+ * all, so the worker is evicted mid-wait and the in-flight response is lost --
+ * recoverable, because phases are idempotent, but it would turn every slow
+ * reply into a redundant re-run.
+ *
+ * A 20-second `chrome.storage` touch prevents that. It runs ONLY while a run
+ * is in flight, and stops the moment it is not: an unconditional keep-alive is
+ * the pattern Chrome's own docs warn against and the Web Store rejects.
+ */
+const HEARTBEAT_MS = 20_000;
+let heartbeat = null;
+
+function startHeartbeat() {
+  if (heartbeat) return;
+  heartbeat = setInterval(() => {
+    if (!running) { stopHeartbeat(); return; }
+    void chrome.storage.local.set({ 'orchestrator-heartbeat': Date.now() });
+  }, HEARTBEAT_MS);
+}
+
+function stopHeartbeat() {
+  if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   logger.log('extension-started', { description: 'Extension installed or updated' });
@@ -294,7 +336,7 @@ async function ensureRunner(setup = null) {
   const page = createPageReader(() => binding);
   const transport = new DomTransport({
     page,
-    config: { timeoutMs: config.timeoutMs ?? 300_000 },
+    config: { timeoutMs: config.timeoutMs ?? 240_000 },
     onEvent: (e) => logger.log(mapTransportEvent(e.type), {
       source: e.surface === 'engineer' ? 'arena' : e.surface === 'reviewer' ? 'deepseek' : 'chatgpt',
       description: describeTransport(e),
@@ -427,17 +469,55 @@ const COMMANDS = {
       return { ok: false, why: 'environment', problems: err?.problems ?? null };
     }
 
+    /*
+     * THE RUN IS NOT AWAITED INSIDE THE MESSAGE HANDLER.
+     *
+     * Verified against Chrome's documented service-worker lifecycle: "Chrome
+     * terminates a service worker when a single request, such as an event or
+     * API call, takes longer than 5 minutes to process."
+     *
+     * `r.start()` is a multi-hour loop. Awaiting it inside `onMessage` makes
+     * the whole run one event, so Chrome would kill the worker at the
+     * five-minute mark -- mid-iteration, every time, on the first real run.
+     * The default per-response timeout was 300_000ms, sitting exactly on that
+     * ceiling: a single slow Arena reply was enough to trigger it.
+     *
+     * So the handler returns immediately and the run proceeds as a detached
+     * task. Each ADAPTER call is its own await, and every chrome API call
+     * inside it resets the 30s idle timer (Chrome 110+), so the worker stays
+     * alive while work is genuinely happening. When it is evicted anyway, the
+     * persisted phase record is what makes resuming correct -- which is the
+     * reason phases were made idempotent in the first place.
+     */
     running = true;
     startedAt = Date.now();
-    try {
-      const verdict = await r.start();
-      notify('Workflow finished', `${verdict.why}. Open the panel for the session summary.`);
-      return verdict;
-    } finally {
-      running = false;
-      await logger.flush();
-      broadcast();
-    }
+    startHeartbeat();
+
+    activeRun = (async () => {
+      try {
+        const verdict = await r.start();
+        notify('Workflow finished', `${verdict.why}. Open the panel for the session summary.`);
+        return verdict;
+      } catch (err) {
+        logger.log('error', { status: 'error', description: `The run ended unexpectedly: ${reason(err)}` });
+        return { stop: true, reason: 'fatal-error', why: reason(err) };
+      } finally {
+        running = false;
+        stopHeartbeat();
+        await logger.flush();
+        broadcast();
+      }
+    })();
+
+    return { ok: true, started: true, runId: projectStore.run?.id ?? null };
+  },
+
+  /**
+   * Wait for the detached run, for tests and for a caller that genuinely
+   * wants the verdict. Never used by the panel, which polls state instead.
+   */
+  async 'await-run'() {
+    return activeRun ? activeRun : { ok: false, why: 'no run in flight' };
   },
 
   async pause() { orch?.pause(); broadcast(); notify('Workflow paused', 'No prompts will be sent until you press Resume.'); },

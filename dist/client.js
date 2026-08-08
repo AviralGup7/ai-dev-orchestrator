@@ -12,9 +12,11 @@
  * two surfaces (popup and side panel) can be open at once without either
  * owning the truth.
  *
- * MV3 service workers are themselves evicted after ~30s idle, which is why
- * every phase boundary persists (see orchestrator.js) and why the log is
- * durable rather than in-memory. This client reconnects transparently.
+ * MV3 service workers are evicted after 30s with no event or extension API
+ * call, and unconditionally if any single event exceeds 5 minutes (verified
+ * against developer.chrome.com, August 2026). That is why every phase boundary
+ * persists and why the log is durable rather than in-memory. This client
+ * reconnects transparently.
  */
 
 /** Shape-compatible with the Logger the panel expects, backed by messages. */

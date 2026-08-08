@@ -830,6 +830,47 @@ const CASES = [
     expect: 'SHOWS THE URL IT FOUND',
     test: 'test/packaging.test.mjs',
   },
+  /* ---- verified platform facts (session 10) ------------------------ */
+  {
+    name: 'the run is awaited inside the message handler again',
+    file: 'extension/background.js',
+    from: '    return { ok: true, started: true, runId: projectStore.run?.id ?? null };',
+    to: '    return activeRun;',
+    expect: 'NOT AWAITED INSIDE ONE MESSAGE EVENT',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'the timeout goes back onto Chrome\'s five-minute ceiling',
+    file: 'src/adapters/base.js',
+    from: '  timeoutMs: 240_000,',
+    to: '  timeoutMs: 300_000,',
+    expect: 'UNDER Chrome',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'the keep-alive runs unconditionally',
+    file: 'extension/background.js',
+    from: '    if (!running) { stopHeartbeat(); return; }',
+    to: '    /* always alive */',
+    expect: 'keep-alive runs only while a run is in flight',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'a read-only shared ChatGPT conversation becomes bindable',
+    file: 'extension/probe.js',
+    from: '    id: [/\\/g\\/[^/]+\\/c\\/([0-9a-zA-Z-]+)/, /\\/c\\/([0-9a-zA-Z-]+)/],',
+    to: '    id: [/\\/g\\/[^/]+\\/c\\/([0-9a-zA-Z-]+)/, /\\/c\\/([0-9a-zA-Z-]+)/, /\\/share\\/([0-9a-zA-Z-]+)/],',
+    expect: 'SHARED ChatGPT conversation is NOT bindable',
+    test: 'test/packaging.test.mjs',
+  },
+  {
+    name: 'custom-GPT conversation URLs stop resolving',
+    file: 'extension/probe.js',
+    from: '    id: [/\\/g\\/[^/]+\\/c\\/([0-9a-zA-Z-]+)/, /\\/c\\/([0-9a-zA-Z-]+)/],',
+    to: '    id: [/\\/xx\\/([0-9a-zA-Z-]+)/],',
+    expect: 'including custom GPTs',
+    test: 'test/packaging.test.mjs',
+  },
 ];
 
 let caught = 0;

@@ -49,9 +49,11 @@ Resolved as **two tiers** (your decision):
 so the boundedness is stated rather than hidden. Sabotage-verified: removing
 that banner fails a named test.
 
-`chrome.storage.local` was rejected for the log: 10 MB cap, and it is a
-key/value store that must be rewritten wholesale, so a 60k-event log means
-re-serialising megabytes on every flush. IndexedDB appends. `chrome.storage`
+`chrome.storage.local` was rejected for the log: a 10 MB cap (5 MB before
+Chrome 114), and it is a key/value store that must be rewritten wholesale, so a
+60k-event log means re-serialising megabytes on every flush. `unlimitedStorage`
+lifts the quota but the implementation slows past ~50 MB. IndexedDB appends.
+*Verified against developer.chrome.com, August 2026.* `chrome.storage`
 is still right for the *memory* object, which is small and rewritten at every
 phase boundary.
 

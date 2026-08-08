@@ -65,8 +65,13 @@ export const SELECTORS = {
 };
 
 export const DEFAULTS = {
-  /** How long the whole exchange may take. */
-  timeoutMs: 300_000,
+  /**
+   * How long the whole exchange may take.
+   *
+   * Kept under Chrome's five-minute single-event ceiling. See the note in
+   * adapters/base.js -- 300s raced the platform's own kill timer.
+   */
+  timeoutMs: 240_000,
   /** How often to look. */
   pollMs: 750,
   /** Text must be unchanged this long before the reply counts as finished. */
