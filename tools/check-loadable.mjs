@@ -256,6 +256,51 @@ if (!problems.length) {
   }
 }
 
+/* ================================================================= stale = */
+
+/**
+ * IS dist/ CURRENT?
+ *
+ * dist/ is committed, which makes the working path discoverable but
+ * introduces a new failure: a stale dist/ that no longer matches src/. The
+ * symptom would be worse than the original bug -- code that looks right in the
+ * editor and behaves like an older version in the browser.
+ *
+ * Rebuilding is cheap and deterministic, so the check is simply: does every
+ * shipped file match its source byte-for-byte?
+ */
+{
+  const stale = [];
+
+  for (const f of readdirSync('src/core').filter((x) => x.endsWith('.js'))) {
+    const shipped = join(ROOT, 'core', f);
+    if (!existsSync(shipped)) { stale.push(`core/${f} is missing from dist/`); continue; }
+    if (readFileSync(join('src/core', f), 'utf8') !== readFileSync(shipped, 'utf8')) {
+      stale.push(`core/${f} differs from src/core/${f}`);
+    }
+  }
+
+  const REWRITE = /(['"])\.\.\/src\/core\/([A-Za-z0-9_.-]+\.js)\1/g;
+  for (const f of readdirSync('extension')) {
+    if (f === 'manifest.template.json' || f.endsWith('.md')) continue;
+    const shipped = join(ROOT, f);
+    if (!existsSync(shipped)) { stale.push(`${f} is missing from dist/`); continue; }
+    const expected = f.endsWith('.js')
+      ? readFileSync(join('extension', f), 'utf8').replace(REWRITE, (_m, q, n) => `${q}./core/${n}${q}`)
+      : readFileSync(join('extension', f), 'utf8');
+    if (expected !== readFileSync(shipped, 'utf8')) stale.push(`${f} differs from extension/${f}`);
+  }
+
+  const pkgVersion = JSON.parse(readFileSync('package.json', 'utf8')).version;
+  if (manifest.version !== pkgVersion) {
+    stale.push(`manifest version ${manifest.version} != package.json ${pkgVersion}`);
+  }
+
+  if (stale.length) {
+    problems.push(...stale.map((s2) => `${s2} — dist/ is stale; run \`npm run build\``));
+  }
+}
+
 /* ================================================================ report = */
 
 for (const n of notes) console.log(`note: ${n}`);

@@ -1,20 +1,48 @@
 # Installing the extension
 
+## Load `dist/`
+
+`chrome://extensions` → **Developer mode** → **Load unpacked** → select
+**`dist/`**.
+
+`dist/` is committed, so a fresh clone already has it. To rebuild after editing
+`src/` or `extension/`:
+
 ```bash
-npm run build          # writes dist/ and verifies it is loadable
+npm run build     # rebuilds dist/ and verifies Chrome can load it
 ```
 
-Then in Chrome:
+### If you see "Service worker registration failed. Status code: 3"
 
-1. `chrome://extensions`
-2. Enable **Developer mode** (top right)
-3. **Load unpacked** → select the **`dist/`** folder
+You have loaded **`extension/`**, not `dist/`. Check the version Chrome shows:
+if it says **0.2.0** you are on the source folder; the built one is **0.3.0**.
 
-> Load `dist/`, **not** `extension/`. The reason is below.
+This is no longer possible on a current checkout — `extension/` has no
+`manifest.json` any more, so Chrome refuses it with *"Manifest file is missing
+or unreadable"*, which at least names the problem. If you are looking at an
+older checkout, `git pull` and load `dist/`.
 
 ---
 
-## Why `extension/` alone does not work
+## Why `extension/` cannot work, and why it was easy to get wrong
+
+This was reported twice. The first time the instruction "load `dist/`" was
+given; the second report pasted a manifest showing version `0.2.0`, a
+`scripting` permission and no `icons` — unmistakably the **source** manifest.
+
+The instruction was right and the packaging was still wrong: `dist/` was
+gitignored, so a fresh clone contained exactly one folder with a
+`manifest.json` in it, and it was the folder that does not work. Telling
+someone to avoid the obvious path is not a fix. Three changes make the working
+path the discoverable one:
+
+| Change | Effect |
+|---|---|
+| `extension/manifest.json` → `manifest.template.json` | Chrome refuses the folder with *"Manifest file is missing or unreadable"* instead of the opaque status-3 error |
+| `dist/` is committed | a clone has the loadable folder already |
+| `check-loadable.mjs` compares `dist/` to source | a committed build cannot silently go stale |
+
+
 
 Loading `extension/` produces:
 
@@ -144,10 +172,16 @@ deleted unnoticed. There is now a test that drives `reason()` directly through
 ## Verification
 
 ```
-207 tests, 0 failures          (8 new, running the real worker)
+209 tests, 0 failures          (10 running the real worker)
 53/53 sabotages caught
 purity ok · env-safety ok
 dist/ is loadable — 34 files, worker evaluates and answers
+```
+
+The staleness guard was verified by appending a line to `dist/core/logger.js`:
+
+```
+core/logger.js differs from src/core/logger.js — dist/ is stale; run `npm run build`
 ```
 
 The loadable check was itself verified by reintroducing both original bugs:

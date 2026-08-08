@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>AI Development Orchestrator</title>
+<style id="s"></style></head>
+<body style="width:300px">
+  <!-- The popup is a LAUNCHER, not the main surface. Chrome destroys a popup
+       whenever focus moves, and this orchestrator's normal operation is
+       switching between AI tabs -- so a popup-hosted Activity Log would be
+       visible only while nothing was happening. It shows live status and the
+       controls that must always be reachable, then hands off to the panel. -->
+  <header><h1>Orchestrator</h1></header>
+  <main>
+    <div id="status"></div>
+    <div id="controls"></div>
+    <div class="controls"><button class="btn primary" id="open" style="width:100%">Open Activity Log →</button></div>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

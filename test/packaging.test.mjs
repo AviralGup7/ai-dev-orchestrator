@@ -212,6 +212,40 @@ test('Start refuses honestly while no AI adapters exist', async () => {
 
 /* ------------------------------------------------------------ packaging - */
 
+test('extension/ has NO manifest.json, so Chrome cannot be pointed at it', () => {
+  /*
+   * THE SAME BUG WAS REPORTED TWICE, and the second time the pasted manifest
+   * was version 0.2.0 with a `scripting` permission and no `icons` -- i.e. the
+   * SOURCE manifest, not the built one. The instruction to load dist/ was
+   * correct and the packaging still made the mistake easy: extension/ was the
+   * only folder in the repo containing a manifest.json, so it looked like the
+   * extension.
+   *
+   * Documentation was not the fix. The fix is that the folder which cannot
+   * work now fails with "Manifest file is missing or unreadable", which names
+   * the problem, instead of "Service worker registration failed. Status code:
+   * 3", which names nothing.
+   */
+  const dir = new URL('../extension/', import.meta.url);
+  assert.equal(existsSync(new URL('manifest.json', dir)), false,
+    'a manifest here makes the broken folder look loadable');
+  assert.ok(existsSync(new URL('manifest.template.json', dir)),
+    'the template is what the build reads');
+});
+
+test('dist/ IS committed — a fresh clone must contain the loadable folder', () => {
+  /*
+   * dist/ was gitignored, so cloning produced a repo whose only manifest was
+   * the one that does not work. Build output in version control is normally
+   * wrong; here it is the difference between the discoverable path and the
+   * working path being the same path.
+   */
+  const ignore = readFileSync(new URL('../.gitignore', import.meta.url), 'utf8');
+  const active = ignore.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
+  assert.equal(active.includes('dist/'), false, 'dist/ must not be ignored');
+  assert.equal(active.includes('dist'), false, 'dist must not be ignored');
+});
+
 test('no extension source imports above its own root', async () => {
   /*
    * The original failure. `background.js` imported `../src/core/…`, which

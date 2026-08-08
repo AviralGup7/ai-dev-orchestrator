@@ -2,4 +2,12 @@ node_modules/
 *.log
 .DS_Store
 demo.html
-dist/
+# dist/ is COMMITTED on purpose.
+#
+# It is build output, and normally that would be ignored. But it is also the
+# only folder Chrome can load, and gitignoring it meant a fresh clone had
+# exactly one folder containing a manifest.json -- extension/ -- which is the
+# one that does not work. That produced the same opaque "status code 3" report
+# twice. A committed dist/ makes the working path the discoverable one.
+#
+# It is rebuilt and verified by `npm run build`, and CI checks it is current.

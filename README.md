@@ -128,22 +128,23 @@ docs/INSTALL.md       loading it in Chrome, and why dist/ exists
 
 ## Installing
 
-```bash
-npm run build   # writes dist/, then verifies Chrome can load it
-```
+`chrome://extensions` → Developer mode → **Load unpacked** → select **`dist/`**.
 
-Then `chrome://extensions` → Developer mode → **Load unpacked** → select
-**`dist/`**.
+`dist/` is committed, so a clone already has it. Rebuild after editing with
+`npm run build`.
 
-Load `dist/`, not `extension/`: the source imports `../src/core/…`, which is
-above the package root and cannot be fetched by a service worker. The build
-assembles a root Chrome accepts and rewrites those imports. Full explanation in
+**Load `dist/`, not `extension/`.** The source imports `../src/core/…`, which
+is above the package root and cannot be fetched by a service worker — the
+engine deliberately lives outside the extension folder so it stays browser-free
+and testable in Node. `extension/` has no `manifest.json` for this reason, so
+Chrome refuses it with a message that names the problem rather than the opaque
+*"Service worker registration failed. Status code: 3"*. Full explanation in
 [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Commands
 
 ```
-npm test            207 tests, no browser required
+npm test            209 tests, no browser required
 npm run build       assemble dist/ and verify Chrome can load it
 npm run purity      fails if the engine grows a browser dependency
 npm run env-safety  fails if anything can open/close/navigate a tab

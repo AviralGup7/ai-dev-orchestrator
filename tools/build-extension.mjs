@@ -72,6 +72,7 @@ let rewrites = 0;
 const extFiles = readdirSync('extension');
 for (const f of extFiles) {
   const src = join('extension', f);
+  if (f === 'manifest.template.json' || f.endsWith('.md')) continue; // template is emitted below
   if (f.endsWith('.js')) {
     const before = readFileSync(src, 'utf8');
     const after = before.replace(REWRITE, (_m, q, name) => {
@@ -172,7 +173,19 @@ for (const size of [16, 48, 128]) {
 
 /* ------------------------------------------------------------ manifest --- */
 
-const manifest = JSON.parse(readFileSync('extension/manifest.json', 'utf8'));
+/*
+ * Read manifest.TEMPLATE.json.
+ *
+ * There is deliberately no `manifest.json` in extension/. Twice now the same
+ * "status code 3" was reported because that folder was loaded instead of
+ * dist/ -- and it was a reasonable mistake, because extension/ was the only
+ * folder in the repo with a manifest in it, so it looked like the extension.
+ *
+ * Without a manifest, Chrome refuses extension/ with "Manifest file is missing
+ * or unreadable", which names the problem. Making the wrong path fail clearly
+ * beats documenting that it is the wrong path.
+ */
+const manifest = JSON.parse(readFileSync('extension/manifest.template.json', 'utf8'));
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
 /*
