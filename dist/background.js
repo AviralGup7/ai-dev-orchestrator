@@ -126,14 +126,43 @@ chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false }).catch(()
  * the pattern Chrome's own docs warn against and the Web Store rejects.
  */
 const HEARTBEAT_MS = 20_000;
+const HEARTBEAT_KEY = 'orchestrator-heartbeat';
 let heartbeat = null;
 
 function startHeartbeat() {
   if (heartbeat) return;
+  /*
+   * Written IMMEDIATELY, not first after 20s.
+   *
+   * A worker evicted 5s into a run would otherwise leave the previous run's
+   * heartbeat (or none) in storage, and the staleness check would misread a
+   * brand-new run as abandoned.
+   */
+  void chrome.storage.local.set({ [HEARTBEAT_KEY]: Date.now() });
   heartbeat = setInterval(() => {
     if (!running) { stopHeartbeat(); return; }
-    void chrome.storage.local.set({ 'orchestrator-heartbeat': Date.now() });
+    void chrome.storage.local.set({ [HEARTBEAT_KEY]: Date.now() });
   }, HEARTBEAT_MS);
+}
+
+/**
+ * The last time a worker confirmed it was alive and running.
+ *
+ * This value was WRITTEN every 20 seconds and read by nothing -- a dead
+ * signal. Reading it is what lets a run that says `running` with no worker
+ * behind it be identified as abandoned instead of displayed as healthy.
+ */
+let heartbeatSeenAt = null;
+
+async function lastHeartbeat() {
+  try {
+    const got = await chrome.storage.local.get(HEARTBEAT_KEY);
+    const at = got?.[HEARTBEAT_KEY];
+    heartbeatSeenAt = Number.isFinite(at) ? at : null;
+    return heartbeatSeenAt;
+  } catch {
+    return null;   // storage unreadable: report unknown, never a false alarm
+  }
 }
 
 function stopHeartbeat() {
@@ -151,6 +180,18 @@ chrome.runtime.onInstalled.addListener(() => {
  * renders "no events" over a run that has been going for two hours.
  */
 async function rehydrate() {
+  /*
+   * Refresh the heartbeat on every wake. `snapshot()` is synchronous (it is
+   * called from `broadcast()` on the logging path), so the value is cached
+   * here rather than awaited there.
+   *
+   * If THIS worker is the one running the loop, `running` is true and the
+   * value is its own current beat. If the worker was evicted and revived by a
+   * panel poll, `running` is false and the value is the DEAD worker's last
+   * beat -- which is exactly the evidence needed.
+   */
+  await lastHeartbeat();
+
   /*
    * The project record is loaded on EVERY wake, not only when the log is
    * empty. An MV3 worker is evicted constantly, and a panel asking for state
@@ -281,7 +322,13 @@ function snapshot() {
     project: projectStore.project,
     run: projectStore.run,
     iterations: projectStore.iterations,
-    resumability: projectStore.resumability(),
+    /*
+     * `running` alone is not evidence: it is a global in a worker that Chrome
+     * destroys without warning, so after an eviction it reads `false` while
+     * the persisted run still says `running`. The heartbeat is the durable
+     * half of the answer.
+     */
+    resumability: projectStore.resumability({ heartbeatAt: running ? Date.now() : heartbeatSeenAt }),
     diagnostics: projectStore.diagnostics,
     binding: binding?.surfaces ?? {},
   };
@@ -717,13 +764,16 @@ const COMMANDS = {
 
   /** Iteration history, for the history view. */
   async history() {
+    /* Same evidence as `snapshot()`: two views must not disagree about
+       whether the run is alive. */
+    const beat = running ? Date.now() : await lastHeartbeat();
     return {
       project: projectStore.project,
       run: projectStore.run,
       iterations: projectStore.iterations,
       runs: await projectStore.listRuns(),
       state: projectStore.state(),
-      resumability: projectStore.resumability(),
+      resumability: projectStore.resumability({ heartbeatAt: beat }),
       diagnostics: projectStore.diagnostics,
     };
   },

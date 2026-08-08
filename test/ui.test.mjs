@@ -238,3 +238,39 @@ test('a memory-only replay says so rather than pretending to be complete', async
   assert.match(html, /Replaying from memory/);
   assert.match(html, /may be missing/);
 });
+
+/* ---------------------------------------------------------------------------
+ * A DEAD RUN MUST NOT LOOK ALIVE.
+ *
+ * Chrome evicts the MV3 worker when a single request exceeds five minutes. The
+ * persisted record still says `running`, so the panel rendered a green live
+ * dot and a counting clock over a run that no longer existed. The user waited
+ * on it. This is the render-side half of that fix.
+ * ------------------------------------------------------------------------ */
+
+test('AN ABANDONED RUN LOSES THE LIVE DOT AND SAYS WHAT HAPPENED', () => {
+  const base = liveStatus({ status: 'running', phase: 'execute', iteration: 1 }, { now: Date.now() });
+
+  const alive = renderStatus({ ...base });
+  const dead = renderStatus({ ...base, abandoned: 'the background worker was shut down by Chrome. Press Resume to continue.' });
+
+  assert.match(alive, /dot live/, 'a genuinely running run keeps the live dot');
+  assert.doesNotMatch(dead, /dot live/,
+    'a green live dot over a dead run is the single most misleading thing this panel can show');
+  assert.match(dead, /dot bad/);
+  assert.match(dead, /background worker was shut down/,
+    'the explanation must be on screen, not only in the log');
+  assert.match(dead, /Press Resume/, 'it must say what to do about it');
+});
+
+test('the abandonment notice is escaped like every other interpolated value', () => {
+  const html = renderStatus(
+    liveStatus({ status: 'running', phase: 'execute', iteration: 1 }, { now: Date.now() }));
+  const nasty = renderStatus({
+    ...liveStatus({ status: 'running', phase: 'execute', iteration: 1 }, { now: Date.now() }),
+    abandoned: '<img src=x onerror="alert(1)">',
+  });
+  assert.ok(!html.includes('onerror'));
+  assert.ok(!nasty.includes('<img src=x'), 'the notice must be escaped');
+  assert.match(nasty, /&lt;img/);
+});

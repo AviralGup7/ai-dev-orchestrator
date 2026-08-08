@@ -301,6 +301,15 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
     const last = events[events.length - 1] || null;
 
     const status = liveStatus(memory, { lastEvent: last, config, startedAt: engine.startedAt(), now: Date.now() });
+    /*
+     * A run whose worker Chrome evicted still reads `status: running`, because
+     * that is what the persisted record says. Without this the panel shows a
+     * live dot and a counting clock over a run that stopped existing -- the
+     * "stuck at 05:56" report. The engine cannot detect it (it is a browser
+     * fact), so the answer is computed in the worker and passed through.
+     */
+    const res = engine.resumability?.();
+    if (res?.abandoned) status.abandoned = res.why;
     $('#status').innerHTML = renderStatus(status);
     $('#controls').innerHTML = renderControls(availableControls(memory));
 

@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   makeProject, makeRun, makeIteration, phaseComplete, markPhaseComplete,
-  nextPhase, resumability, toMemory, fromMemory, describeState,
+  nextPhase, resumability, HEARTBEAT_STALE_MS, toMemory, fromMemory, describeState,
   beginActive, endActive, activeMs, SCHEMA_VERSION,
 } from '../src/core/session.js';
 import { migrate, detectVersion, checkIntegrity, MIGRATIONS } from '../src/core/migrate.js';
@@ -374,4 +374,87 @@ test('the ProjectMemoryStore satisfies the engine\'s store interface', async () 
 
   assert.deepEqual(ps.project.knownIssues, ['found a bug']);
   assert.equal(ps.iterations[0].overall, 42);
+});
+
+/* ---------------------------------------------------------------------------
+ * THE ABANDONED RUN
+ *
+ * MV3 terminates the worker when a single request exceeds five minutes. The
+ * run is a detached promise, so eviction destroys it silently while the
+ * persisted record still says `state: 'running'`. The panel then shows a live
+ * spinner and a counting clock over a run that no longer exists -- which is
+ * exactly what a user reported as "stuck at 05:56".
+ *
+ * The heartbeat that proves this was already being written every 20s and read
+ * by NOTHING. These tests are the reader.
+ * ------------------------------------------------------------------------ */
+
+test('A RUN THAT SAYS RUNNING WITH A DEAD WORKER IS REPORTED AS ABANDONED', () => {
+  const now = Date.now();
+  const run = { state: 'running', startedAt: now - 20 * 60_000, updatedAt: now - 20 * 60_000, currentIteration: 1 };
+
+  // Worker last checked in 10 minutes ago: it is gone.
+  const r = resumability(run, { now, heartbeatAt: now - 10 * 60_000 });
+
+  assert.equal(r.abandoned, true, 'a missing worker must be named, not hidden');
+  assert.equal(r.requiresUser, true,
+    'nothing resumes on its own, so claiming a clean auto-resume is a lie');
+  assert.match(r.why, /background worker was shut down/);
+  assert.match(r.why, /Press Resume/, 'it must say what to actually do');
+});
+
+test('a LIVE run with a fresh heartbeat is not called abandoned', () => {
+  /*
+   * The counterweight. The engineer legitimately takes hours; the heartbeat
+   * ticks throughout. If a long wait were flagged as abandoned, the warning
+   * would fire constantly and stop being believed.
+   */
+  const now = Date.now();
+  const run = { state: 'running', startedAt: now - 3 * 3600_000, updatedAt: now - 3 * 3600_000, currentIteration: 1 };
+
+  const r = resumability(run, { now, heartbeatAt: now - 5_000 });
+  assert.notEqual(r.abandoned, true, 'three hours of real work is not abandonment');
+  assert.equal(r.requiresUser, false);
+});
+
+test('an unknown heartbeat never raises a false alarm', () => {
+  /*
+   * `heartbeatAt` is null when storage could not be read, or on an older
+   * record written before the heartbeat existed. Absence of evidence must not
+   * become evidence of death -- that would tell users their healthy run is
+   * broken.
+   */
+  const now = Date.now();
+  const run = { state: 'running', startedAt: now - 60_000, updatedAt: now - 60_000, currentIteration: 1 };
+
+  for (const beat of [null, undefined, NaN]) {
+    const r = resumability(run, { now, heartbeatAt: beat });
+    assert.notEqual(r.abandoned, true, `heartbeatAt=${beat} must not be read as abandonment`);
+  }
+});
+
+test('the abandonment window tolerates several missed beats', () => {
+  /*
+   * The worker writes every 20s. One missed beat is a slow storage write, not
+   * a dead worker; the threshold must sit above that or a healthy run gets
+   * flagged during a GC pause.
+   */
+  const now = Date.now();
+  const run = { state: 'running', startedAt: now - 600_000, updatedAt: now - 600_000, currentIteration: 1 };
+
+  assert.ok(HEARTBEAT_STALE_MS >= 60_000,
+    'below three missed beats this will produce false alarms');
+  assert.notEqual(resumability(run, { now, heartbeatAt: now - 40_000 }).abandoned, true,
+    'two missed beats is not yet evidence');
+  assert.equal(resumability(run, { now, heartbeatAt: now - 120_000 }).abandoned, true,
+    'six missed beats is unambiguous');
+});
+
+test('a stopped run is never relabelled as abandoned', () => {
+  /* State the user set beats an inference about the worker. */
+  const now = Date.now();
+  const stopped = { state: 'stopped', stopReason: 'user-stopped', updatedAt: now - 3600_000 };
+  const r = resumability(stopped, { now, heartbeatAt: now - 3600_000 });
+  assert.notEqual(r.abandoned, true);
+  assert.match(r.why, /you stopped this run/);
 });

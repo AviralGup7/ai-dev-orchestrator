@@ -50,7 +50,14 @@ const clock = (at) => new Date(at).toLocaleTimeString('en-GB', { hour12: false }
  * ========================================================================== */
 
 export function renderStatus(s) {
-  const dot = s.status === 'running' ? 'live' : s.status === 'blocked' ? 'bad' : 'idle';
+  /*
+   * An abandoned run must NOT show the live dot. A green pulsing indicator over
+   * a run whose worker Chrome killed is the single most misleading thing this
+   * panel can do -- it is what kept a user waiting on a dead run.
+   */
+  const dot = s.abandoned ? 'bad'
+    : s.status === 'running' ? 'live'
+    : s.status === 'blocked' ? 'bad' : 'idle';
 
   /*
    * Health is rendered with its evidence fraction ALWAYS, and greyed when
@@ -83,6 +90,7 @@ export function renderStatus(s) {
       </div>
 
       <div class="next"><span class="label">Next</span> ${esc(s.next)}</div>
+      ${s.abandoned ? `<div class="err">⚠ ${esc(s.abandoned)}</div>` : ''}
       ${s.stagnating ? '<div class="warn">⟳ Loop detected — a strategy review has been pulled forward.</div>' : ''}
       ${s.blocked ? `<div class="err">⛔ ${esc(s.blocked.detail)}</div>` : ''}
     </div>`;

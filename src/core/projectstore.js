@@ -350,8 +350,13 @@ export class ProjectStore {
     return describeState({ project: this.project, run: this.run, iterations: this.iterations });
   }
 
-  resumability() {
-    return resumability(this.run);
+  /**
+   * @param {{heartbeatAt?: number|null}} [opts]  the worker's last check-in,
+   *   supplied by the extension. Pure code cannot read `chrome.storage`, so it
+   *   is passed in -- the same inversion the purity rule forces everywhere.
+   */
+  resumability(opts = {}) {
+    return resumability(this.run, opts);
   }
 
   /** The engine's working state, projected from the record. */

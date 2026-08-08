@@ -208,8 +208,54 @@ export function nextPhase(run, iterationN) {
  * half-finished execute phase" is a different answer from "yes, cleanly", and
  * a user deciding whether to resume or start over needs to know which.
  */
-export function resumability(run, { now = Date.now(), staleMs = 6 * 3600_000 } = {}) {
+/**
+ * How long a `running` run may go without a heartbeat before we conclude the
+ * worker died rather than the work being slow.
+ *
+ * The worker touches storage every 20s while a run is in flight, so three
+ * missed beats is unambiguous. This is NOT a work timeout: the engineer may
+ * legitimately take hours, and during all of it the heartbeat keeps ticking.
+ * Silence here means the WORKER is gone, not that the model is thinking.
+ */
+export const HEARTBEAT_STALE_MS = 90_000;
+
+/**
+ * @param {object} run
+ * @param {object} [opts]
+ * @param {number} [opts.now]
+ * @param {number} [opts.staleMs]
+ * @param {number|null} [opts.heartbeatAt]  last worker heartbeat, if known
+ */
+export function resumability(run, { now = Date.now(), staleMs = 6 * 3600_000, heartbeatAt = null } = {}) {
   if (!run) return { resumable: false, why: 'there is no run to resume' };
+
+  /*
+   * A RUN THAT SAYS `running` WITH NOBODY RUNNING IT.
+   *
+   * MV3 evicts the worker when a single request exceeds five minutes, and the
+   * detached run is an ordinary promise -- eviction destroys it silently. The
+   * persisted record still says `state: 'running'`, so the panel showed a live
+   * spinner and an elapsed clock over a run that had stopped existing, and
+   * `resumability()` answered `requiresUser: false` -- "resuming is clean" --
+   * for a run nobody was going to resume, because nothing calls resume on its
+   * own.
+   *
+   * The heartbeat that detects this was already being WRITTEN every 20s and
+   * never read anywhere: a dead signal, exactly like `failedAttempts`. Reading
+   * it is the whole fix.
+   */
+  if (run.state === 'running' && Number.isFinite(heartbeatAt)) {
+    const since = now - heartbeatAt;
+    if (since > HEARTBEAT_STALE_MS) {
+      return {
+        resumable: true,
+        requiresUser: true,
+        abandoned: true,
+        why: `this run says it is running but the extension has not checked in for ${Math.round(since / 1000)}s — `
+          + 'the background worker was shut down by Chrome. Press Resume to continue from the last completed phase.',
+      };
+    }
+  }
 
   if (run.state === 'stopped' && run.stopReason === 'user-stopped') {
     /*
