@@ -68,12 +68,25 @@ test('a regression is only counted between iterations that BOTH ran tests', () =
    * report a regression every time somebody skipped the suite, drowning the
    * real signal.
    */
+  /*
+   * The fixture must be able to DETECT the mistake, not merely survive it.
+   *
+   * My first version was clean -> untested -> clean, which yields no
+   * regression whether or not the untested iteration is counted, so a
+   * sabotage that treated missing evidence as {passed:0,failed:0} was
+   * invisible. The gap has to sit between a FAILING run and a clean one:
+   * counting the untested iteration as clean would then invent a regression
+   * that never happened.
+   */
   const withGap = [
-    iter(1, { overall: 50, evidence: [testEv(100, 0)] }),
+    iter(1, { overall: 50, evidence: [testEv(98, 4)] }),       // failing
     iter(2, { overall: 52, evidence: [] }),                    // no tests run
-    iter(3, { overall: 54, evidence: [testEv(100, 0)] }),
+    iter(3, { overall: 54, evidence: [testEv(100, 0)] }),      // clean again
   ];
-  assert.equal(analyse(withGap).regressionRate.value, 0);
+  const gapped = analyse(withGap);
+  assert.equal(gapped.regressionRate.value, 0, 'no regression may be invented across the gap');
+  assert.equal(gapped.regressionRate.n, 1, 'only ONE comparable pair exists, not two');
+  assert.equal(gapped.recoveries.value, 1, 'and the recovery is seen');
 
   const real = [
     iter(1, { overall: 50, evidence: [testEv(100, 0)] }),

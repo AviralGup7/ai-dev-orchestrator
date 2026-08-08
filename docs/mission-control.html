@@ -1,0 +1,975 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Mission Control</title><style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3;
+  --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+h1 { font-size: 14px; margin: 0; letter-spacing: .2px; }
+.muted { color: var(--muted); }
+.small { font-size: 11px; }
+.grow { flex: 1; min-width: 0; }
+
+header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+  position: sticky; top: 0; z-index: 5;
+}
+
+/* tabs */
+.tabs { display: flex; gap: 2px; padding: 6px 8px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+.tab {
+  background: none; border: 0; color: var(--muted); padding: 7px 11px; cursor: pointer;
+  font: inherit; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0;
+}
+.tab:hover { color: var(--text); background: #1f242c; }
+.tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.tab .count { font-size: 10px; background: var(--bad); color: #fff; border-radius: 8px; padding: 0 5px; margin-left: 4px; }
+
+main { padding: 10px 12px 24px; }
+section[hidden] { display: none; }
+
+/* status */
+.status { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 11px; margin-bottom: 10px; }
+.status .row { display: flex; align-items: flex-start; gap: 9px; }
+.label { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+.step { font-size: 15px; font-weight: 600; }
+.why { color: var(--muted); font-size: 12px; margin-top: 1px; overflow-wrap: anywhere; }
+.timer { font-variant-numeric: tabular-nums; color: var(--accent); font-size: 15px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); margin-top: 6px; flex: none; }
+.dot.live { background: var(--ok); animation: pulse 1.6s infinite; }
+.dot.bad { background: var(--bad); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin-top: 11px; }
+.big { font-size: 19px; font-weight: 700; }
+.big.unmeasured { color: var(--warn); }
+.next { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.next .label { margin-right: 6px; }
+.warn { margin-top: 9px; padding: 7px 9px; border-radius: 6px; background: #2d2410; color: var(--warn); font-size: 12px; }
+.err  { margin-top: 9px; padding: 7px 9px; border-radius: 6px; background: #2d1214; color: var(--bad); font-size: 12px; }
+
+/* workflow */
+.flow { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.stage { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 5px; color: var(--muted); }
+.stage .marker { width: 14px; text-align: center; }
+.stage.done { color: var(--ok); }
+.stage.active { color: var(--text); background: #1f2937; font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+.arrow { color: var(--line); padding-left: 13px; line-height: 1; font-size: 11px; }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.btn {
+  background: #21262d; color: var(--text); border: 1px solid var(--line);
+  padding: 6px 11px; border-radius: 6px; cursor: pointer; font: inherit;
+}
+.btn:hover:not(:disabled) { background: #30363d; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.primary { background: #238636; border-color: #2ea043; }
+.btn.danger:not(:disabled) { background: #4a1517; border-color: #6e2224; color: #ff9d9d; }
+.btn.small { padding: 3px 8px; font-size: 11px; }
+
+/* filters */
+.filters { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-bottom: 8px; }
+.filters input[type="search"] {
+  flex: 1; min-width: 110px; background: var(--bg); border: 1px solid var(--line);
+  color: var(--text); padding: 5px 8px; border-radius: 6px; font: inherit;
+}
+.chip {
+  background: #21262d; border: 1px solid var(--line); color: var(--muted);
+  padding: 3px 9px; border-radius: 12px; cursor: pointer; font-size: 11px;
+}
+.chip[aria-pressed="true"] { background: #1f6feb33; border-color: var(--accent); color: var(--accent); }
+
+/* log */
+.truncated { padding: 7px 9px; margin-bottom: 8px; border-radius: 6px; background: #1f2937; color: var(--accent); font-size: 11px; }
+.entry { border-bottom: 1px solid var(--line); padding: 7px 2px; }
+.entry:hover { background: #11161d; }
+.entry-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+.badge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; color: #fff; letter-spacing: .4px; }
+.type { font-weight: 500; }
+.iter { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+.dur { font-size: 10px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.desc { color: var(--muted); font-size: 12px; margin: 2px 0 0 4px; overflow-wrap: anywhere; }
+.evid { font-size: 9px; color: #444c56; margin-left: 4px; font-family: ui-monospace, monospace; }
+.entry.error .type { color: var(--bad); }
+.spin { display: inline-block; animation: spin 1.4s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg) } }
+details.data { margin: 4px 0 0 4px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 7px; overflow: auto; font-size: 11px; margin: 5px 0 0; }
+.empty { color: var(--muted); text-align: center; padding: 26px 10px; }
+
+/* errors */
+.errhead { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+.errcard { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--bad); border-radius: 6px; padding: 9px; margin-bottom: 8px; }
+.errcard.resolved { border-left-color: var(--ok); opacity: .65; }
+.errtop { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.errmeta { color: var(--muted); font-size: 11px; margin: 3px 0; }
+.errfix { color: var(--accent); font-size: 12px; margin: 6px 0; }
+.pill { font-size: 10px; padding: 1px 7px; border-radius: 9px; flex: none; }
+.pill.ok { background: #16371f; color: var(--ok); }
+.pill.bad { background: #3a1416; color: var(--bad); }
+
+/* summary */
+table.summary { width: 100%; border-collapse: collapse; }
+table.summary th { text-align: left; font-weight: 400; color: var(--muted); padding: 5px 0; font-size: 12px; }
+table.summary td { text-align: right; padding: 5px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+code { font-family: ui-monospace, monospace; font-size: 11px; background: #11161d; padding: 1px 4px; border-radius: 3px; }
+
+/* mission control */
+.roles, .envstrip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px; margin-bottom: 10px; }
+.role, .envrow { display: flex; align-items: center; gap: 8px; padding: 5px 2px; }
+.role + .role, .envrow + .envrow { border-top: 1px solid var(--line); }
+.roledot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.rolename { font-weight: 500; }
+.rolestate { font-size: 10px; font-weight: 700; letter-spacing: .6px; }
+.envname { min-width: 74px; }
+
+/* scores */
+.scorerow { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.scorename { width: 96px; font-size: 12px; color: var(--muted); }
+.bar { flex: 1; height: 7px; background: #21262d; border-radius: 4px; overflow: hidden; }
+.fill { display: block; height: 100%; border-radius: 4px; }
+.scoreval { width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; }
+.conf { font-size: 9px; width: 58px; text-align: right; letter-spacing: .3px; }
+.scorebasis { font-size: 10px; color: var(--muted); margin: 0 0 4px 104px; }
+
+/* history */
+.itercard { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; margin-bottom: 7px; }
+.itercard > summary { padding: 8px 10px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+.itercard > summary::-webkit-details-marker { display: none; }
+.iterscore { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--accent); }
+.iterbody { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.iterbody .label { display: inline-block; min-width: 74px; font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+
+/* replay */
+.narrative { border-left: 2px solid var(--line); padding-left: 10px; }
+.narrow { display: flex; gap: 8px; padding: 3px 0; font-size: 12px; align-items: baseline; }
+
+/* landing + preflight */
+.landing, .preflight { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.modes { display: grid; gap: 7px; margin: 8px 0 12px; }
+.modecard {
+  display: flex; flex-direction: column; gap: 3px; text-align: left; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px 11px;
+  color: var(--text); font: inherit;
+}
+.modecard:hover { border-color: var(--muted); }
+.modecard.chosen { border-color: var(--accent); background: #1f6feb1a; box-shadow: inset 2px 0 0 var(--accent); }
+.modename { font-weight: 600; font-size: 14px; }
+.modeblurb { color: var(--muted); font-size: 12px; }
+.modecard .pill { align-self: flex-start; margin-top: 3px; }
+.field { display: block; margin-bottom: 10px; }
+.field .label { display: block; margin-bottom: 4px; }
+.field input, .field textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 7px 9px; font: inherit; resize: vertical;
+}
+.field input:focus, .field textarea:focus { outline: none; border-color: var(--accent); }
+.fielderr { display: block; color: var(--bad); font-size: 11px; margin-top: 3px; }
+.explain { color: var(--muted); font-size: 12px; background: #11161d; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+.check { display: flex; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--line); align-items: flex-start; }
+.check .mark { width: 14px; text-align: center; }
+.check.ok .mark { color: var(--ok); }
+.check.bad .mark { color: var(--bad); }
+.check.warnrow .mark { color: var(--warn); }
+.preview { margin: 10px 0; }
+.preview pre { max-height: 260px; }
+
+body{max-width:470px;margin:0 auto;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.sec{padding:12px;border-top:1px solid var(--line)}
+.secl{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:8px}
+</style></head><body>
+<header><h1>AI Development Orchestrator</h1><span class="muted small">Mission Control</span></header>
+<div class="sec"><div class="secl">Live status</div>
+    <div class="status">
+      <div class="row">
+        <span class="dot live"></span>
+        <div class="grow">
+          <div class="label">Current step</div>
+          <div class="step">Waiting for AI response</div>
+          <div class="why">running the test suite</div>
+        </div>
+        <div class="timer" title="time in this step">01:37</div>
+      </div>
+
+      <div class="grid">
+        <div><div class="label">Current AI</div><div>ARENA</div></div>
+        <div><div class="label">Iteration</div><div>8 / 50</div></div>
+        <div><div class="label">Elapsed</div><div>43:20</div></div>
+        <div><div class="label">Project health</div><div><span class="big ">78%</span>
+       <span class="muted small">2/9 dimensions measured</span></div></div>
+      </div>
+
+      <div class="next"><span class="label">Next</span> Evidence from the run (tests, build, diff) will be collected.</div>
+      
+      
+    </div><div class="controls"><button data-action="start" class="btn primary"
+        disabled title="not available while running">Start</button><button data-action="pause" class="btn"
+         title="Pause">Pause</button><button data-action="resume" class="btn"
+        disabled title="not available while running">Resume</button><button data-action="stop" class="btn danger"
+         title="Stop">Stop</button><button data-action="skip" class="btn"
+         title="Skip Current Step">Skip Current Step</button><button data-action="retry" class="btn"
+         title="Retry Current Step">Retry Current Step</button><button data-action="export" class="btn"
+         title="Export Logs">Export Logs</button><button data-action="report" class="btn"
+         title="View Latest Report">View Latest Report</button></div></div>
+<div class="sec"><div class="secl">AI roles</div><div class="roles"><div class="role">
+      <span class="roledot" style="background:#d29922"></span>
+      <div class="grow">
+        <div class="rolename">Manager <span class="muted small">ChatGPT</span></div>
+        
+      </div>
+      <span class="rolestate" style="color:#d29922">WAITING</span>
+    </div><div class="role">
+      <span class="roledot" style="background:#58a6ff;animation:pulse 1.4s infinite"></span>
+      <div class="grow">
+        <div class="rolename">Engineer <span class="muted small">Arena</span></div>
+        <div class="muted small">Waiting for AI response</div>
+      </div>
+      <span class="rolestate" style="color:#58a6ff">WORKING</span>
+    </div><div class="role">
+      <span class="roledot" style="background:#6e7681"></span>
+      <div class="grow">
+        <div class="rolename">Reviewer <span class="muted small">DeepSeek</span></div>
+        
+      </div>
+      <span class="rolestate" style="color:#6e7681">IDLE</span>
+    </div></div></div>
+<div class="sec"><div class="secl">Environment</div><div class="envstrip"><div class="envrow">
+      <span class="dot" style="background:var(--ok)"></span>
+      <span class="envname">Arena</span>
+      <span class="muted small grow">tab 22</span>
+      <span style="color:var(--ok)">READY</span>
+    </div><div class="envrow">
+      <span class="dot" style="background:var(--ok)"></span>
+      <span class="envname">ChatGPT</span>
+      <span class="muted small grow">tab 11</span>
+      <span style="color:var(--ok)">READY</span>
+    </div><div class="envrow">
+      <span class="dot" style="background:var(--muted)"></span>
+      <span class="envname">DeepSeek</span>
+      <span class="muted small grow"></span>
+      <span style="color:var(--muted)">OFF</span>
+    </div><div class="envrow">
+      <span class="dot" style="background:var(--ok)"></span>
+      <span class="envname">Project</span>
+      <span class="muted small grow">A CSV export feature for the reporting d</span>
+      <span style="color:var(--ok)">READY</span>
+    </div>
+  
+  </div></div>
+<div class="sec"><div class="secl">Workflow</div><div class="flow"><div class="stage done">
+        <span class="marker">✓</span>
+        <span>Project Scope</span>
+      </div><div class="arrow">↓</div><div class="stage done">
+        <span class="marker">✓</span>
+        <span>ChatGPT Planning</span>
+      </div><div class="arrow">↓</div><div class="stage active">
+        <span class="marker">▶</span>
+        <span>Arena Coding</span>
+      </div><div class="arrow">↓</div><div class="stage pending">
+        <span class="marker">○</span>
+        <span>Evidence Collection</span>
+      </div><div class="arrow">↓</div><div class="stage pending">
+        <span class="marker">○</span>
+        <span>ChatGPT Review</span>
+      </div><div class="arrow">↓</div><div class="stage pending">
+        <span class="marker">○</span>
+        <span>DeepSeek Strategy Review</span>
+      </div><div class="arrow">↓</div><div class="stage pending">
+        <span class="marker">○</span>
+        <span>Next Iteration</span>
+      </div></div></div>
+<div class="sec"><div class="secl">Project health</div>
+    <div class="muted small" style="margin-bottom:8px">
+      4 of 9 dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    <div class="scorerow" title="diff">
+        <span class="scorename">completion</span>
+        <span class="bar"><span class="fill" style="width:78%;background:var(--accent)"></span></span>
+        <span class="scoreval">78%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="lint">
+        <span class="scorename">quality</span>
+        <span class="bar"><span class="fill" style="width:71%;background:var(--accent)"></span></span>
+        <span class="scoreval">71%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ lint</div><div class="scorerow" title="1276 passed, 0 failed">
+        <span class="scorename">testing</span>
+        <span class="bar"><span class="fill" style="width:94%;background:var(--ok)"></span></span>
+        <span class="scoreval">94%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ test</div><div class="scorerow" title="asserted">
+        <span class="scorename">architecture</span>
+        <span class="bar"><span class="fill" style="width:70%;background:var(--warn)"></span></span>
+        <span class="scoreval">70%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">uiux</span>
+        <span class="bar"><span class="fill" style="width:55%;background:var(--warn)"></span></span>
+        <span class="scoreval">55%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">performance</span>
+        <span class="bar"><span class="fill" style="width:62%;background:var(--warn)"></span></span>
+        <span class="scoreval">62%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">security</span>
+        <span class="bar"><span class="fill" style="width:66%;background:var(--warn)"></span></span>
+        <span class="scoreval">66%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="diff">
+        <span class="scorename">documentation</span>
+        <span class="bar"><span class="fill" style="width:80%;background:var(--ok)"></span></span>
+        <span class="scoreval">80%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="asserted">
+        <span class="scorename">accessibility</span>
+        <span class="bar"><span class="fill" style="width:35%;background:var(--warn)"></span></span>
+        <span class="scoreval">35%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div></div>
+<div class="sec"><div class="secl">Analytics</div><table class="summary"><tr><th>Improvement / iteration</th><td>+4 pts <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>Score trend</th><td>+4 pts/iter <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>Iteration duration</th><td>42s <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>AI response time</th><td><span class="muted" title="no timed responses recorded">—</span></td></tr><tr><th>Success rate</th><td>100% <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>Retries / iteration</th><td>0 <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>Test growth</th><td>+48 tests <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>Coverage change</th><td><span class="muted" title="needs coverage evidence from at least two iterations">—</span></td></tr><tr><th>Regression rate</th><td>16.7% <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>Bug discovery</th><td>0/iter <span class="conf" style="color:var(--warn)">estimated</span></td></tr><tr><th>Stagnation frequency</th><td>14.3% <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>Evidence-backed</th><td>44.4% <span class="conf" style="color:var(--ok)">measured</span></td></tr><tr><th>Token efficiency</th><td><span class="muted" title="the browser transport cannot observe token counts">—</span></td></tr><tr><th>Estimated cost</th><td><span class="muted" title="no pricing information is available through a browser tab">—</span></td></tr></table></div>
+<div class="sec"><div class="secl">Iteration history</div><details class="itercard">
+      <summary>
+        <strong>Iteration 7</strong>
+        <span class="muted small">document the public plugin interface</span>
+        <span class="iterscore">78%</span>
+      </summary>
+      <div class="iterbody">
+        <div><span class="label">Objective</span> document the public plugin interface</div>
+        <div class="muted small">Why: Largest gap between current state and target.</div>
+        <div><span class="label">Result</span> Implemented the change and ran the suite.</div>
+        <div><span class="label">Files</span> <code>src/export/csv.js</code> <code>test/csv.test.mjs</code></div>
+        <div><span class="label">Evidence</span> <code>test</code> <code>build</code> <code>diff</code></div>
+        <div><span class="label">Duration</span> 42s</div>
+        
+        
+        
+        <details><summary class="muted small">scores</summary>
+    <div class="muted small" style="margin-bottom:8px">
+      4 of 9 dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    <div class="scorerow" title="diff">
+        <span class="scorename">completion</span>
+        <span class="bar"><span class="fill" style="width:78%;background:var(--accent)"></span></span>
+        <span class="scoreval">78%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="lint">
+        <span class="scorename">quality</span>
+        <span class="bar"><span class="fill" style="width:71%;background:var(--accent)"></span></span>
+        <span class="scoreval">71%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ lint</div><div class="scorerow" title="1276 passed, 0 failed">
+        <span class="scorename">testing</span>
+        <span class="bar"><span class="fill" style="width:94%;background:var(--ok)"></span></span>
+        <span class="scoreval">94%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ test</div><div class="scorerow" title="asserted">
+        <span class="scorename">architecture</span>
+        <span class="bar"><span class="fill" style="width:70%;background:var(--warn)"></span></span>
+        <span class="scoreval">70%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">uiux</span>
+        <span class="bar"><span class="fill" style="width:55%;background:var(--warn)"></span></span>
+        <span class="scoreval">55%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">performance</span>
+        <span class="bar"><span class="fill" style="width:62%;background:var(--warn)"></span></span>
+        <span class="scoreval">62%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">security</span>
+        <span class="bar"><span class="fill" style="width:66%;background:var(--warn)"></span></span>
+        <span class="scoreval">66%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="diff">
+        <span class="scorename">documentation</span>
+        <span class="bar"><span class="fill" style="width:80%;background:var(--ok)"></span></span>
+        <span class="scoreval">80%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="asserted">
+        <span class="scorename">accessibility</span>
+        <span class="bar"><span class="fill" style="width:35%;background:var(--warn)"></span></span>
+        <span class="scoreval">35%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div></details>
+        
+      </div>
+    </details><details class="itercard">
+      <summary>
+        <strong>Iteration 6</strong>
+        <span class="muted small">add integration tests for the export pipeline</span>
+        <span class="iterscore">74%</span>
+      </summary>
+      <div class="iterbody">
+        <div><span class="label">Objective</span> add integration tests for the export pipeline</div>
+        <div class="muted small">Why: Largest gap between current state and target.</div>
+        <div><span class="label">Result</span> Implemented the change and ran the suite.</div>
+        <div><span class="label">Files</span> <code>src/export/csv.js</code> <code>test/csv.test.mjs</code></div>
+        <div><span class="label">Evidence</span> <code>test</code> <code>build</code> <code>diff</code></div>
+        <div><span class="label">Duration</span> 42s</div>
+        
+        
+        
+        <details><summary class="muted small">scores</summary>
+    <div class="muted small" style="margin-bottom:8px">
+      4 of 9 dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    <div class="scorerow" title="diff">
+        <span class="scorename">completion</span>
+        <span class="bar"><span class="fill" style="width:74%;background:var(--accent)"></span></span>
+        <span class="scoreval">74%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="lint">
+        <span class="scorename">quality</span>
+        <span class="bar"><span class="fill" style="width:67%;background:var(--accent)"></span></span>
+        <span class="scoreval">67%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ lint</div><div class="scorerow" title="1276 passed, 0 failed">
+        <span class="scorename">testing</span>
+        <span class="bar"><span class="fill" style="width:90%;background:var(--ok)"></span></span>
+        <span class="scoreval">90%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ test</div><div class="scorerow" title="asserted">
+        <span class="scorename">architecture</span>
+        <span class="bar"><span class="fill" style="width:66%;background:var(--warn)"></span></span>
+        <span class="scoreval">66%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">uiux</span>
+        <span class="bar"><span class="fill" style="width:51%;background:var(--warn)"></span></span>
+        <span class="scoreval">51%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">performance</span>
+        <span class="bar"><span class="fill" style="width:58%;background:var(--warn)"></span></span>
+        <span class="scoreval">58%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">security</span>
+        <span class="bar"><span class="fill" style="width:62%;background:var(--warn)"></span></span>
+        <span class="scoreval">62%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="diff">
+        <span class="scorename">documentation</span>
+        <span class="bar"><span class="fill" style="width:76%;background:var(--ok)"></span></span>
+        <span class="scoreval">76%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="asserted">
+        <span class="scorename">accessibility</span>
+        <span class="bar"><span class="fill" style="width:31%;background:var(--warn)"></span></span>
+        <span class="scoreval">31%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div></details>
+        <div><span class="label">Artifacts</span> <code>coverage.json</code></div>
+      </div>
+    </details><details class="itercard">
+      <summary>
+        <strong>Iteration 5</strong>
+        <span class="muted small">improve error handling for the sync module</span>
+        <span class="iterscore">70%</span>
+      </summary>
+      <div class="iterbody">
+        <div><span class="label">Objective</span> improve error handling for the sync module</div>
+        <div class="muted small">Why: Largest gap between current state and target.</div>
+        <div><span class="label">Result</span> Implemented the change and ran the suite.</div>
+        <div><span class="label">Files</span> <code>src/export/csv.js</code> <code>test/csv.test.mjs</code></div>
+        <div><span class="label">Evidence</span> <code>test</code> <code>build</code> <code>diff</code></div>
+        <div><span class="label">Duration</span> 42s</div>
+        
+        
+        
+        <details><summary class="muted small">scores</summary>
+    <div class="muted small" style="margin-bottom:8px">
+      4 of 9 dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    <div class="scorerow" title="diff">
+        <span class="scorename">completion</span>
+        <span class="bar"><span class="fill" style="width:70%;background:var(--accent)"></span></span>
+        <span class="scoreval">70%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="lint">
+        <span class="scorename">quality</span>
+        <span class="bar"><span class="fill" style="width:63%;background:var(--accent)"></span></span>
+        <span class="scoreval">63%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ lint</div><div class="scorerow" title="1276 passed, 0 failed">
+        <span class="scorename">testing</span>
+        <span class="bar"><span class="fill" style="width:86%;background:var(--ok)"></span></span>
+        <span class="scoreval">86%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ test</div><div class="scorerow" title="asserted">
+        <span class="scorename">architecture</span>
+        <span class="bar"><span class="fill" style="width:62%;background:var(--warn)"></span></span>
+        <span class="scoreval">62%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">uiux</span>
+        <span class="bar"><span class="fill" style="width:47%;background:var(--warn)"></span></span>
+        <span class="scoreval">47%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">performance</span>
+        <span class="bar"><span class="fill" style="width:54%;background:var(--warn)"></span></span>
+        <span class="scoreval">54%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">security</span>
+        <span class="bar"><span class="fill" style="width:58%;background:var(--warn)"></span></span>
+        <span class="scoreval">58%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="diff">
+        <span class="scorename">documentation</span>
+        <span class="bar"><span class="fill" style="width:72%;background:var(--ok)"></span></span>
+        <span class="scoreval">72%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="asserted">
+        <span class="scorename">accessibility</span>
+        <span class="bar"><span class="fill" style="width:27%;background:var(--warn)"></span></span>
+        <span class="scoreval">27%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div></details>
+        
+      </div>
+    </details><details class="itercard">
+      <summary>
+        <strong>Iteration 4</strong>
+        <span class="muted small">fix embedded comma quoting</span>
+        <span class="iterscore">66%</span>
+      </summary>
+      <div class="iterbody">
+        <div><span class="label">Objective</span> fix embedded comma quoting</div>
+        <div class="muted small">Why: Largest gap between current state and target.</div>
+        <div><span class="label">Result</span> Implemented the change and ran the suite.</div>
+        <div><span class="label">Files</span> <code>src/export/csv.js</code> <code>test/csv.test.mjs</code></div>
+        <div><span class="label">Evidence</span> <code>test</code> <code>build</code> <code>diff</code></div>
+        <div><span class="label">Duration</span> 42s</div>
+        <div class="warn small">Loop signals: file-churn, score-plateau</div>
+        <div><span class="label">Review</span> change-strategy — Stop iterating on the exporter; the failing area is the sync module.</div>
+        
+        <details><summary class="muted small">scores</summary>
+    <div class="muted small" style="margin-bottom:8px">
+      4 of 9 dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    <div class="scorerow" title="diff">
+        <span class="scorename">completion</span>
+        <span class="bar"><span class="fill" style="width:66%;background:var(--accent)"></span></span>
+        <span class="scoreval">66%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="lint">
+        <span class="scorename">quality</span>
+        <span class="bar"><span class="fill" style="width:59%;background:var(--accent)"></span></span>
+        <span class="scoreval">59%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ lint</div><div class="scorerow" title="1276 passed, 0 failed">
+        <span class="scorename">testing</span>
+        <span class="bar"><span class="fill" style="width:82%;background:var(--ok)"></span></span>
+        <span class="scoreval">82%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ test</div><div class="scorerow" title="asserted">
+        <span class="scorename">architecture</span>
+        <span class="bar"><span class="fill" style="width:58%;background:var(--warn)"></span></span>
+        <span class="scoreval">58%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">uiux</span>
+        <span class="bar"><span class="fill" style="width:43%;background:var(--warn)"></span></span>
+        <span class="scoreval">43%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">performance</span>
+        <span class="bar"><span class="fill" style="width:50%;background:var(--warn)"></span></span>
+        <span class="scoreval">50%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">security</span>
+        <span class="bar"><span class="fill" style="width:54%;background:var(--warn)"></span></span>
+        <span class="scoreval">54%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="diff">
+        <span class="scorename">documentation</span>
+        <span class="bar"><span class="fill" style="width:68%;background:var(--ok)"></span></span>
+        <span class="scoreval">68%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="asserted">
+        <span class="scorename">accessibility</span>
+        <span class="bar"><span class="fill" style="width:23%;background:var(--warn)"></span></span>
+        <span class="scoreval">23%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div></details>
+        
+      </div>
+    </details><details class="itercard">
+      <summary>
+        <strong>Iteration 3</strong>
+        <span class="muted small">fix quoting of embedded commas</span>
+        <span class="iterscore">62%</span>
+      </summary>
+      <div class="iterbody">
+        <div><span class="label">Objective</span> fix quoting of embedded commas</div>
+        <div class="muted small">Why: Largest gap between current state and target.</div>
+        <div><span class="label">Result</span> Implemented the change and ran the suite.</div>
+        <div><span class="label">Files</span> <code>src/export/csv.js</code> <code>test/csv.test.mjs</code></div>
+        <div><span class="label">Evidence</span> <code>test</code> <code>build</code> <code>diff</code></div>
+        <div><span class="label">Duration</span> 42s</div>
+        
+        
+        <div class="err small">reported &quot;complete&quot; with 3 failing test(s)</div>
+        <details><summary class="muted small">scores</summary>
+    <div class="muted small" style="margin-bottom:8px">
+      4 of 9 dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    <div class="scorerow" title="diff">
+        <span class="scorename">completion</span>
+        <span class="bar"><span class="fill" style="width:62%;background:var(--accent)"></span></span>
+        <span class="scoreval">62%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="lint">
+        <span class="scorename">quality</span>
+        <span class="bar"><span class="fill" style="width:55%;background:var(--accent)"></span></span>
+        <span class="scoreval">55%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ lint</div><div class="scorerow" title="1276 passed, 0 failed">
+        <span class="scorename">testing</span>
+        <span class="bar"><span class="fill" style="width:78%;background:var(--ok)"></span></span>
+        <span class="scoreval">78%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ test</div><div class="scorerow" title="asserted">
+        <span class="scorename">architecture</span>
+        <span class="bar"><span class="fill" style="width:54%;background:var(--warn)"></span></span>
+        <span class="scoreval">54%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">uiux</span>
+        <span class="bar"><span class="fill" style="width:39%;background:var(--warn)"></span></span>
+        <span class="scoreval">39%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">performance</span>
+        <span class="bar"><span class="fill" style="width:46%;background:var(--warn)"></span></span>
+        <span class="scoreval">46%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">security</span>
+        <span class="bar"><span class="fill" style="width:50%;background:var(--warn)"></span></span>
+        <span class="scoreval">50%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="diff">
+        <span class="scorename">documentation</span>
+        <span class="bar"><span class="fill" style="width:64%;background:var(--ok)"></span></span>
+        <span class="scoreval">64%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="asserted">
+        <span class="scorename">accessibility</span>
+        <span class="bar"><span class="fill" style="width:20%;background:var(--warn)"></span></span>
+        <span class="scoreval">20%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div></details>
+        
+      </div>
+    </details><details class="itercard">
+      <summary>
+        <strong>Iteration 2</strong>
+        <span class="muted small">iteration 2 objective</span>
+        <span class="iterscore">58%</span>
+      </summary>
+      <div class="iterbody">
+        <div><span class="label">Objective</span> iteration 2 objective</div>
+        <div class="muted small">Why: Largest gap between current state and target.</div>
+        <div><span class="label">Result</span> Implemented the change and ran the suite.</div>
+        <div><span class="label">Files</span> <code>src/export/csv.js</code> <code>test/csv.test.mjs</code></div>
+        <div><span class="label">Evidence</span> <code>test</code> <code>build</code> <code>diff</code></div>
+        <div><span class="label">Duration</span> 42s</div>
+        
+        
+        
+        <details><summary class="muted small">scores</summary>
+    <div class="muted small" style="margin-bottom:8px">
+      4 of 9 dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    <div class="scorerow" title="diff">
+        <span class="scorename">completion</span>
+        <span class="bar"><span class="fill" style="width:58%;background:var(--accent)"></span></span>
+        <span class="scoreval">58%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="lint">
+        <span class="scorename">quality</span>
+        <span class="bar"><span class="fill" style="width:51%;background:var(--accent)"></span></span>
+        <span class="scoreval">51%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ lint</div><div class="scorerow" title="1276 passed, 0 failed">
+        <span class="scorename">testing</span>
+        <span class="bar"><span class="fill" style="width:74%;background:var(--ok)"></span></span>
+        <span class="scoreval">74%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ test</div><div class="scorerow" title="asserted">
+        <span class="scorename">architecture</span>
+        <span class="bar"><span class="fill" style="width:50%;background:var(--warn)"></span></span>
+        <span class="scoreval">50%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">uiux</span>
+        <span class="bar"><span class="fill" style="width:35%;background:var(--warn)"></span></span>
+        <span class="scoreval">35%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">performance</span>
+        <span class="bar"><span class="fill" style="width:42%;background:var(--warn)"></span></span>
+        <span class="scoreval">42%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">security</span>
+        <span class="bar"><span class="fill" style="width:46%;background:var(--warn)"></span></span>
+        <span class="scoreval">46%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="diff">
+        <span class="scorename">documentation</span>
+        <span class="bar"><span class="fill" style="width:60%;background:var(--ok)"></span></span>
+        <span class="scoreval">60%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="asserted">
+        <span class="scorename">accessibility</span>
+        <span class="bar"><span class="fill" style="width:20%;background:var(--warn)"></span></span>
+        <span class="scoreval">20%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div></details>
+        
+      </div>
+    </details><details class="itercard">
+      <summary>
+        <strong>Iteration 1</strong>
+        <span class="muted small">Initialise the project: standards, tests, first commit</span>
+        <span class="iterscore">54%</span>
+      </summary>
+      <div class="iterbody">
+        <div><span class="label">Objective</span> Initialise the project: standards, tests, first commit</div>
+        <div class="muted small">Why: Largest gap between current state and target.</div>
+        <div><span class="label">Result</span> Implemented the change and ran the suite.</div>
+        <div><span class="label">Files</span> <code>src/export/csv.js</code> <code>test/csv.test.mjs</code></div>
+        <div><span class="label">Evidence</span> <code>test</code> <code>build</code> <code>diff</code></div>
+        <div><span class="label">Duration</span> 42s</div>
+        
+        
+        
+        <details><summary class="muted small">scores</summary>
+    <div class="muted small" style="margin-bottom:8px">
+      4 of 9 dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    <div class="scorerow" title="diff">
+        <span class="scorename">completion</span>
+        <span class="bar"><span class="fill" style="width:54%;background:var(--accent)"></span></span>
+        <span class="scoreval">54%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="lint">
+        <span class="scorename">quality</span>
+        <span class="bar"><span class="fill" style="width:47%;background:var(--accent)"></span></span>
+        <span class="scoreval">47%</span>
+        <span class="conf" style="color:var(--accent)">inferred</span>
+      </div><div class="scorebasis">↳ lint</div><div class="scorerow" title="1276 passed, 0 failed">
+        <span class="scorename">testing</span>
+        <span class="bar"><span class="fill" style="width:70%;background:var(--ok)"></span></span>
+        <span class="scoreval">70%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ test</div><div class="scorerow" title="asserted">
+        <span class="scorename">architecture</span>
+        <span class="bar"><span class="fill" style="width:46%;background:var(--warn)"></span></span>
+        <span class="scoreval">46%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">uiux</span>
+        <span class="bar"><span class="fill" style="width:31%;background:var(--warn)"></span></span>
+        <span class="scoreval">31%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">performance</span>
+        <span class="bar"><span class="fill" style="width:38%;background:var(--warn)"></span></span>
+        <span class="scoreval">38%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="asserted">
+        <span class="scorename">security</span>
+        <span class="bar"><span class="fill" style="width:42%;background:var(--warn)"></span></span>
+        <span class="scoreval">42%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div><div class="scorerow" title="diff">
+        <span class="scorename">documentation</span>
+        <span class="bar"><span class="fill" style="width:56%;background:var(--ok)"></span></span>
+        <span class="scoreval">56%</span>
+        <span class="conf" style="color:var(--ok)">measured</span>
+      </div><div class="scorebasis">↳ diff</div><div class="scorerow" title="asserted">
+        <span class="scorename">accessibility</span>
+        <span class="bar"><span class="fill" style="width:20%;background:var(--warn)"></span></span>
+        <span class="scoreval">20%</span>
+        <span class="conf" style="color:var(--warn)">asserted</span>
+      </div></details>
+        
+      </div>
+    </details></div>
+<div class="sec"><div class="secl">Replay</div><div class="narrative">
+    <div class="narrow">
+      <span class="time">00:01:40</span>
+      <span class="iter">i1</span>
+      <span>Iteration 1 began</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:01:41</span>
+      <span class="iter">i1</span>
+      <span>Objective: Initialise the project: standards, tests, first commit</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:02:00</span>
+      <span class="iter">i1</span>
+      <span>Evidence: test, build, diff</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:02:10</span>
+      <span class="iter">i1</span>
+      <span>Scored 54%</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:03:20</span>
+      <span class="iter">i2</span>
+      <span>Iteration 2 began</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:03:21</span>
+      <span class="iter">i2</span>
+      <span>Objective: iteration 2 objective</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:03:40</span>
+      <span class="iter">i2</span>
+      <span>Evidence: test, build, diff</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:03:50</span>
+      <span class="iter">i2</span>
+      <span>Scored 58%</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:05:00</span>
+      <span class="iter">i3</span>
+      <span>Iteration 3 began</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:05:01</span>
+      <span class="iter">i3</span>
+      <span>Objective: fix quoting of embedded commas</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:05:20</span>
+      <span class="iter">i3</span>
+      <span>Evidence: test, build, diff</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:05:30</span>
+      <span class="iter">i3</span>
+      <span>Scored 62%</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:06:40</span>
+      <span class="iter">i4</span>
+      <span>Iteration 4 began</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:06:41</span>
+      <span class="iter">i4</span>
+      <span>Objective: fix embedded comma quoting</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:07:00</span>
+      <span class="iter">i4</span>
+      <span>Evidence: test, build, diff</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:07:10</span>
+      <span class="iter">i4</span>
+      <span>Scored 66%</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:07:11</span>
+      <span class="iter">i4</span>
+      <span>Loop detected: file-churn, score-plateau</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:07:12</span>
+      <span class="iter">i4</span>
+      <span>Strategy changed: Stop iterating on the exporter; the failing area is the sync module.</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:08:20</span>
+      <span class="iter">i5</span>
+      <span>Iteration 5 began</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:08:21</span>
+      <span class="iter">i5</span>
+      <span>Objective: improve error handling for the sync module</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:08:40</span>
+      <span class="iter">i5</span>
+      <span>Evidence: test, build, diff</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:08:50</span>
+      <span class="iter">i5</span>
+      <span>Scored 70%</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:10:00</span>
+      <span class="iter">i6</span>
+      <span>Iteration 6 began</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:10:01</span>
+      <span class="iter">i6</span>
+      <span>Objective: add integration tests for the export pipeline</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:10:20</span>
+      <span class="iter">i6</span>
+      <span>Evidence: test, build, diff</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:10:30</span>
+      <span class="iter">i6</span>
+      <span>Scored 74%</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:11:40</span>
+      <span class="iter">i7</span>
+      <span>Iteration 7 began</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:11:41</span>
+      <span class="iter">i7</span>
+      <span>Objective: document the public plugin interface</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:12:00</span>
+      <span class="iter">i7</span>
+      <span>Evidence: test, build, diff</span>
+    </div>
+    <div class="narrow">
+      <span class="time">00:12:10</span>
+      <span class="iter">i7</span>
+      <span>Score 74% → 78%</span>
+    </div></div>
+    <div class="muted small" style="margin-top:8px">Reconstructed from 37 logged events. No AI was contacted.</div></div>
+</body></html>

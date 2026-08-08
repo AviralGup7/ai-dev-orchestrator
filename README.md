@@ -9,12 +9,13 @@ Not a coding assistant. Not a prompt-copier. The distinguishing claim is
 **judgement**: it decides what to work on next, notices when it is going in
 circles, and stops when it is actually done.
 
-> **Status: engine + environment contract + observability UI + first-run
-> workflow.** Everything except the three AI adapters, which are the remaining
-> milestone. See [`docs/SPEC.md`](docs/SPEC.md),
-> [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md),
-> [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) and
-> [`docs/FIRSTRUN.md`](docs/FIRSTRUN.md).
+> **Status: complete MVP.** Engine, three AI adapters, DOM transport,
+> simulation environment, durable session/run storage with migrations, evidence
+> parsers, failure recovery, analytics, replay, artifact management and Mission
+> Control. 376 tests, 98 sabotages, zero runtime dependencies.
+>
+> Start with [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Install:
+> [`docs/INSTALL.md`](docs/INSTALL.md).
 >
 > **Try it without installing:** `npm run demo` writes `demo.html` — the real
 > engine, logger and UI driven by fake adapters on a sped-up clock. Open it and
@@ -122,8 +123,18 @@ src/core/        the engine — pure, no browser, runs in Node
   report.js        parses Arena's report into typed evidence
   preflight.js     the pre-start checklist
   surface.js       what a page capture keeps, and when one is allowed
-src/adapters/    per-AI request/response shaping (next milestone)
-src/transports/  the only layer that knows about tabs
+  schema.js        response validation — role limits enforced structurally
+  parse.js         terminal output -> typed evidence, with provenance
+  session.js       Project / Session / Run / Iteration / Phase
+  migrate.js       schema versions and migrations
+  projectstore.js  durable storage, split by write frequency
+  runner.js        engine + adapters + record, and the recovery policy
+  analytics.js     metrics that admit when they are unknown
+  replay.js        reconstruct a past run from its events
+  artifacts.js     downloads, verified rather than assumed
+src/adapters/    manager · engineer · reviewer, over an injected transport
+src/transports/  DOM transport — page mechanics, still browser-free
+src/sim/         simulated transport with eight injectable faults
 extension/       manifest, service worker, popup, side panel, renderers
   ui.js            pure render functions, unit-tested without a browser
   panel.js         side-panel controller
@@ -137,6 +148,11 @@ docs/OBSERVABILITY.md the logging subsystem and the UI
 docs/FIRSTRUN.md      the three workflow modes and the injected protocol
 docs/INSTALL.md       loading it in Chrome, and why dist/ exists
 docs/SURFACE-SCAN.md  automatic page capture on error
+docs/ARCHITECTURE.md  layers, guarantees, and where each lives
+docs/ADAPTERS.md      the adapter contract and role boundaries
+docs/EVENTS.md        the event taxonomy
+docs/RECOVERY.md      the failure recovery contract
+docs/DEVELOPMENT.md   how to work on this
 ```
 
 ## Installing

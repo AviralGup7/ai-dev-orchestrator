@@ -107,6 +107,7 @@ export async function connectToBackground() {
     iterations: () => state.iterations ?? [],
     resumability: () => state.resumability,
     diagnostics: () => state.diagnostics ?? [],
+    binding: () => state.binding ?? {},
     start: (setup) => send('start', { setup }),
     pause: () => send('pause'),
     resume: () => send('resume'),

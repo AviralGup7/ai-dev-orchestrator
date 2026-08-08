@@ -160,3 +160,81 @@ test('the summary admits storage failures rather than rounding them away', () =>
   const html = renderSummary(summarise([], null, { sinkFailures: [{ error: 'quota' }] }));
   assert.match(html, /1 storage failure/);
 });
+
+/* ====================================================== mission control == */
+
+test('the scorecard colours by CONFIDENCE, not by value', async () => {
+  /*
+   * A 95% asserted score and a 95% measured score are identical as numbers and
+   * mean completely different things. If the UI presents them the same way,
+   * the entire scoring model is undone at the last step.
+   */
+  const { renderScores } = await import('../extension/ui.js');
+  const html = renderScores([
+    { dimension: 'testing', score: 95, confidence: 'measured', basis: [{ kind: 'test' }] },
+    { dimension: 'uiux', score: 95, confidence: 'asserted', basis: [] },
+  ]);
+  assert.match(html, /var\(--ok\)/, 'measured is green');
+  assert.match(html, /var\(--warn\)/, 'asserted is amber');
+  assert.match(html, /1 of 2 dimensions rest on evidence/);
+  assert.match(html, /cannot end a run/);
+});
+
+test('an unknown metric renders as a dash with a reason, never a zero', async () => {
+  const { renderAnalytics } = await import('../extension/ui.js');
+  const { analyse } = await import('../src/core/analytics.js');
+  const html = renderAnalytics(analyse([]));
+  assert.match(html, /Token efficiency/);
+  assert.equal(/Token efficiency<\/th><td>0/.test(html), false, 'must not fabricate a zero');
+  assert.match(html, /—/);
+  assert.match(html, /cannot observe token counts/);
+});
+
+test('the environment strip distinguishes missing from optional', async () => {
+  const { renderEnvironment } = await import('../extension/ui.js');
+  const html = renderEnvironment({ surfaces: { manager: { tabId: 11 } }, project: 'a project' });
+  assert.match(html, />READY</);
+  assert.match(html, />MISSING</, 'a required missing surface is called out');
+  assert.match(html, />OFF</, 'an optional one is not an error');
+});
+
+test('the roles panel shows which AI has the floor', async () => {
+  const { renderRoles } = await import('../extension/ui.js');
+  const working = renderRoles({ ai: 'arena', status: 'running', step: 'Waiting for Arena' },
+    { surfaces: { manager: { tabId: 1 }, engineer: { tabId: 2 } } });
+  assert.match(working, />WORKING</);
+  assert.match(working, />WAITING</, 'the others are waiting, not idle');
+});
+
+test('iteration history explains why the run moved on', async () => {
+  const { renderHistory } = await import('../extension/ui.js');
+  const html = renderHistory([{
+    n: 4, startedAt: 0, finishedAt: 42000,
+    objective: { text: 'fix comma quoting', rationale: 'the largest gap' },
+    summary: 'patched the writer', filesChanged: ['src/csv.js'],
+    evidence: [{ kind: 'test' }], overall: 62,
+    signals: [{ kind: 'file-churn' }],
+    review: { recommendation: 'change-strategy', newDirection: 'move to sync' },
+    contradictions: [{ message: 'reported complete with 3 failing tests' }],
+  }]);
+  assert.match(html, /fix comma quoting/);
+  assert.match(html, /the largest gap/);
+  assert.match(html, /Loop signals: file-churn/);
+  assert.match(html, /move to sync/);
+  assert.match(html, /reported complete with 3 failing/);
+  assert.match(html, /42s/);
+});
+
+test('replay states plainly that nothing was contacted', async () => {
+  const { renderReplay } = await import('../extension/ui.js');
+  const html = renderReplay({ narrative: [{ at: Date.now(), iteration: 1, text: 'Objective: x' }], events: 12, durable: true });
+  assert.match(html, /No AI was contacted/);
+  assert.match(html, /12 logged events/);
+});
+
+test('a memory-only replay says so rather than pretending to be complete', async () => {
+  const { renderReplay } = await import('../extension/ui.js');
+  const html = renderReplay({ narrative: [{ at: 1, iteration: 1, text: 'x' }], events: 3, durable: false });
+  assert.match(html, /Replaying from memory/);
+  assert.match(html, /may be missing/);
+});

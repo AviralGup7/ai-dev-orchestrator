@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Development Orchestrator",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "Coordinates ChatGPT, Arena and DeepSeek to drive a software project toward a measured quality target — visibly, and under your control.",
   "minimum_chrome_version": "114",
   "permissions": [

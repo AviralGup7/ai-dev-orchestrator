@@ -389,3 +389,194 @@ export function renderPromptPreview(text) {
       <pre>${esc(text)}</pre>
     </details>`;
 }
+
+/* ========================================================================== *
+ * MISSION CONTROL
+ * ========================================================================== */
+
+const AI_STATE_COLOUR = { WORKING: '#58a6ff', WAITING: '#d29922', READY: '#3fb950', IDLE: '#6e7681', BLOCKED: '#f85149' };
+
+/**
+ * The three AI roles and what each is doing.
+ *
+ * Derived from the live status rather than stored, for the reason status.js
+ * already gives: a field written at the start of a phase and not cleared on a
+ * throw reports "WORKING" forever after a crash.
+ */
+export function renderRoles(status, environment = {}) {
+  const roles = [
+    { key: 'chatgpt', label: 'Manager', surface: 'manager', who: 'ChatGPT' },
+    { key: 'arena', label: 'Engineer', surface: 'engineer', who: 'Arena' },
+    { key: 'deepseek', label: 'Reviewer', surface: 'reviewer', who: 'DeepSeek' },
+  ];
+
+  return `<div class="roles">${roles.map((r) => {
+    const bound = environment?.surfaces?.[r.surface];
+    let state = 'IDLE';
+    if (!bound) state = r.surface === 'reviewer' ? 'IDLE' : 'BLOCKED';
+    else if (status.ai === r.key) state = 'WORKING';
+    else if (status.status === 'running') state = 'WAITING';
+    else if (status.status === 'blocked') state = 'BLOCKED';
+    else state = 'READY';
+
+    return `<div class="role">
+      <span class="roledot" style="background:${AI_STATE_COLOUR[state]}${state === 'WORKING' ? ';animation:pulse 1.4s infinite' : ''}"></span>
+      <div class="grow">
+        <div class="rolename">${esc(r.label)} <span class="muted small">${esc(r.who)}</span></div>
+        ${state === 'WORKING' && status.step ? `<div class="muted small">${esc(status.step)}</div>` : ''}
+      </div>
+      <span class="rolestate" style="color:${AI_STATE_COLOUR[state]}">${state}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+/** The environment strip: what is bound, and what is missing. */
+export function renderEnvironment(environment, diagnostics = []) {
+  const rows = [
+    ['Arena', 'engineer', true],
+    ['ChatGPT', 'manager', true],
+    ['DeepSeek', 'reviewer', false],
+    ['Project', '__project', true],
+  ];
+  const surfaces = environment?.surfaces ?? {};
+
+  return `<div class="envstrip">${rows.map(([label, key, required]) => {
+    const ok = key === '__project' ? Boolean(environment?.project) : Boolean(surfaces[key]);
+    const state = ok ? 'READY' : required ? 'MISSING' : 'OFF';
+    const colour = ok ? 'var(--ok)' : required ? 'var(--bad)' : 'var(--muted)';
+    const detail = key === '__project'
+      ? (environment?.project ?? '')
+      : (surfaces[key] ? `tab ${surfaces[key].tabId}` : '');
+    return `<div class="envrow">
+      <span class="dot" style="background:${colour}"></span>
+      <span class="envname">${esc(label)}</span>
+      <span class="muted small grow">${esc(String(detail).slice(0, 40))}</span>
+      <span style="color:${colour}">${state}</span>
+    </div>`;
+  }).join('')}
+  ${diagnostics.length ? `<div class="warn small">${diagnostics.map((d) => esc(d.message)).join('<br>')}</div>` : ''}
+  </div>`;
+}
+
+/**
+ * The scorecard: every dimension with its confidence made visible.
+ *
+ * Bars are coloured by CONFIDENCE, not by value. A 95% asserted score and a
+ * 95% measured score look identical as numbers and mean completely different
+ * things, and the whole scoring model is undone if the UI presents them the
+ * same way.
+ */
+export function renderScores(scores = []) {
+  if (!scores.length) return '<div class="empty">Nothing scored yet.</div>';
+
+  const colour = { measured: 'var(--ok)', inferred: 'var(--accent)', asserted: 'var(--warn)' };
+  const evidenced = scores.filter((s) => s.confidence !== 'asserted').length;
+
+  return `
+    <div class="muted small" style="margin-bottom:8px">
+      ${evidenced} of ${scores.length} dimensions rest on evidence —
+      the rest are the model's opinion and cannot end a run.
+    </div>
+    ${scores.map((s) => {
+    const basis = (s.basis || []).map((b) => b.kind).join(', ');
+    return `<div class="scorerow" title="${esc(s.reasoning || basis || s.confidence)}">
+        <span class="scorename">${esc(s.dimension)}</span>
+        <span class="bar"><span class="fill" style="width:${s.score}%;background:${colour[s.confidence]}"></span></span>
+        <span class="scoreval">${s.score}%</span>
+        <span class="conf" style="color:${colour[s.confidence]}">${s.confidence}</span>
+      </div>${basis ? `<div class="scorebasis">↳ ${esc(basis)}</div>` : ''}`;
+  }).join('')}`;
+}
+
+/** Analytics, rendering `unknown` as a dash rather than a fabricated zero. */
+export function renderAnalytics(a) {
+  if (!a) return '<div class="empty">No analytics yet.</div>';
+
+  const rows = [
+    ['Improvement / iteration', a.improvement, (v) => `${v > 0 ? '+' : ''}${v} pts`],
+    ['Score trend', a.trend, (v) => `${v > 0 ? '+' : ''}${v} pts/iter`],
+    ['Iteration duration', a.iterationMs, (v) => `${Math.round(v / 1000)}s`],
+    ['AI response time', a.latency, (v) => `${Math.round(v / 1000)}s`],
+    ['Success rate', a.successRate, (v) => `${v}%`],
+    ['Retries / iteration', a.retryRate, (v) => String(v)],
+    ['Test growth', a.testGrowth, (v) => `${v > 0 ? '+' : ''}${v} tests`],
+    ['Coverage change', a.coverageGrowth, (v) => `${v > 0 ? '+' : ''}${v}%`],
+    ['Regression rate', a.regressionRate, (v) => `${v}%`],
+    ['Bug discovery', a.bugDiscoveryRate, (v) => `${v}/iter`],
+    ['Stagnation frequency', a.stagnationFrequency, (v) => `${v}%`],
+    ['Evidence-backed', a.evidencedShare, (v) => `${v}%`],
+    ['Token efficiency', a.tokenEfficiency, String],
+    ['Estimated cost', a.cost, String],
+  ];
+
+  return `<table class="summary">${rows.map(([label, m, fmt]) => {
+    const known = m && m.basis !== 'unknown' && m.value != null;
+    /*
+     * An unknown metric is a dash with a tooltip, never a zero. A fabricated
+     * number ends a question that an empty one would prompt.
+     */
+    const cell = known
+      ? `${esc(fmt(m.value))} <span class="conf" style="color:${m.basis === 'measured' ? 'var(--ok)' : 'var(--warn)'}">${m.basis}</span>`
+      : `<span class="muted" title="${esc(m?.note ?? '')}">—</span>`;
+    return `<tr><th>${esc(label)}</th><td>${cell}</td></tr>`;
+  }).join('')}</table>`;
+}
+
+/**
+ * Iteration history — why the run moved from N to N+1.
+ */
+export function renderHistory(iterations = []) {
+  if (!iterations.length) return '<div class="empty">No iterations yet.</div>';
+
+  return [...iterations].reverse().map((it) => {
+    const ev = (it.evidence || []).map((e) => `<code>${esc(e.kind)}</code>`).join(' ') || '<span class="muted">none</span>';
+    /*
+     * `Number.isFinite`, not truthiness. A timestamp of 0 is falsy, so the
+     * truthy check reported "—" for any iteration whose clock started at the
+     * epoch — which is every iteration in a test fixture, and any real one on
+     * a machine with a badly-set clock. The bug is invisible in production and
+     * makes the fixture look broken, which is the worst combination: it trains
+     * you to distrust the test rather than the code.
+     */
+    const dur = Number.isFinite(it.finishedAt) && Number.isFinite(it.startedAt)
+      ? `${Math.round((it.finishedAt - it.startedAt) / 1000)}s`
+      : '—';
+    const signals = (it.signals || []).map((s) => s.kind ?? s).join(', ');
+
+    return `<details class="itercard">
+      <summary>
+        <strong>Iteration ${it.n}</strong>
+        <span class="muted small">${esc((it.objective?.text ?? 'no objective').slice(0, 60))}</span>
+        <span class="iterscore">${it.overall != null ? `${it.overall}%` : '—'}</span>
+      </summary>
+      <div class="iterbody">
+        <div><span class="label">Objective</span> ${esc(it.objective?.text ?? '—')}</div>
+        ${it.objective?.rationale ? `<div class="muted small">Why: ${esc(it.objective.rationale)}</div>` : ''}
+        <div><span class="label">Result</span> ${esc((it.summary || '—').slice(0, 400))}</div>
+        <div><span class="label">Files</span> ${(it.filesChanged || []).map((f) => `<code>${esc(f)}</code>`).join(' ') || '<span class="muted">none</span>'}</div>
+        <div><span class="label">Evidence</span> ${ev}</div>
+        <div><span class="label">Duration</span> ${dur}</div>
+        ${signals ? `<div class="warn small">Loop signals: ${esc(signals)}</div>` : ''}
+        ${it.review ? `<div><span class="label">Review</span> ${esc(it.review.recommendation)}${it.review.newDirection ? ` — ${esc(it.review.newDirection)}` : ''}</div>` : ''}
+        ${(it.contradictions || []).length ? `<div class="err small">${it.contradictions.map((c) => esc(c.message)).join('<br>')}</div>` : ''}
+        ${it.scores?.length ? `<details><summary class="muted small">scores</summary>${renderScores(it.scores)}</details>` : ''}
+        ${(it.artifacts || []).length ? `<div><span class="label">Artifacts</span> ${it.artifacts.map((a) => `<code>${esc(a.filename ?? a)}</code>`).join(' ')}</div>` : ''}
+      </div>
+    </details>`;
+  }).join('');
+}
+
+/** The replay narrative — the decision trail, in order. */
+export function renderReplay(replayData) {
+  if (!replayData?.narrative?.length) return '<div class="empty">Nothing to replay yet.</div>';
+  const banner = replayData.durable === false
+    ? '<div class="warn small">Replaying from memory — the durable log was unavailable, so earlier events may be missing.</div>'
+    : '';
+  return banner + `<div class="narrative">${replayData.narrative.map((n) => `
+    <div class="narrow">
+      <span class="time">${new Date(n.at).toLocaleTimeString('en-GB', { hour12: false })}</span>
+      <span class="iter">i${n.iteration ?? 0}</span>
+      <span>${esc(n.text)}</span>
+    </div>`).join('')}</div>
+    <div class="muted small" style="margin-top:8px">Reconstructed from ${replayData.events} logged events. No AI was contacted.</div>`;
+}

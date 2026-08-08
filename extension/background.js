@@ -237,6 +237,7 @@ function snapshot() {
     iterations: projectStore.iterations,
     resumability: projectStore.resumability(),
     diagnostics: projectStore.diagnostics,
+    binding: binding?.surfaces ?? {},
   };
 }
 

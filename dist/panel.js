@@ -20,7 +20,11 @@
  * repaints at a fixed rate; the "Elapsed" clock needs that timer anyway.
  */
 
-import { renderStatus, renderWorkflow, renderLog, renderControls, renderErrors, renderSummary, renderLanding, renderPreflight, renderPromptPreview, esc } from './ui.js';
+import {
+  renderStatus, renderWorkflow, renderLog, renderControls, renderErrors, renderSummary,
+  renderLanding, renderPreflight, renderPromptPreview, renderRoles, renderEnvironment,
+  renderScores, renderAnalytics, renderHistory, renderReplay, esc,
+} from './ui.js';
 import { MODES } from './core/modes.js';
 import { liveStatus, workflowState, errorCenter } from './core/status.js';
 import { availableControls } from './core/controls.js';
@@ -28,8 +32,15 @@ import { summarise } from './core/logger.js';
 import { CHANNELS } from './core/events.js';
 
 const TABS = [
-  { key: 'log', label: 'Activity Log' },
-  { key: 'workflow', label: 'Workflow' },
+  /*
+   * Activity Log FIRST, still. It is the source of truth during execution and
+   * the spec is explicit that the icon opens to it. Mission Control is second
+   * because it answers "how is it going", which is the question you ask when
+   * the log is not already answering it.
+   */
+  { key: 'log', label: 'Activity' },
+  { key: 'mission', label: 'Mission' },
+  { key: 'history', label: 'History' },
   { key: 'errors', label: 'Errors' },
   { key: 'summary', label: 'Summary' },
 ];
@@ -65,6 +76,8 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
   let promptPreview = null;
   /** Surfaced in the panel, so a broken control is visible, not just logged. */
   let lastError = null;
+  /** Lazily fetched, invalidated when an iteration completes. */
+  const cache = { analytics: null, replay: null };
 
   root.innerHTML = `
     <header>
@@ -85,7 +98,8 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
         </div>
         <div id="log"></div>
       </section>
-      <section id="pane-workflow" hidden></section>
+      <section id="pane-mission" hidden></section>
+      <section id="pane-history" hidden></section>
       <section id="pane-errors" hidden></section>
       <section id="pane-summary" hidden></section>
     </main>`;
@@ -295,8 +309,37 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
 
     if (tab === 'log') {
       $('#log').innerHTML = renderLog(logger.view(filters), logger.notShown);
-    } else if (tab === 'workflow') {
-      $('#pane-workflow').innerHTML = renderWorkflow(workflowState(memory));
+    } else if (tab === 'mission') {
+      const iterations = engine.iterations?.() ?? [];
+      const scores = iterations.at(-1)?.scores ?? [];
+      $('#pane-mission').innerHTML =
+        renderRoles(status, { surfaces: engine.binding?.() ?? {}, project: engine.project?.()?.name })
+        + renderEnvironment(
+          { surfaces: engine.binding?.() ?? {}, project: engine.project?.()?.scope },
+          engine.diagnostics?.() ?? [],
+        )
+        + renderWorkflow(workflowState(memory))
+        + '<div class="label" style="margin:12px 0 6px">Project health</div>'
+        + renderScores(scores)
+        + '<div class="label" style="margin:12px 0 6px">Analytics</div>'
+        + renderAnalytics(cache.analytics);
+      /*
+       * Analytics are fetched lazily and cached, not recomputed on every
+       * repaint. The panel repaints twice a second while running; recomputing
+       * a least-squares fit over the whole history that often would burn CPU
+       * to produce the same number.
+       */
+      if (!cache.analytics && engine.analytics) {
+        engine.analytics().then((a) => { cache.analytics = a; markDirty(); }).catch(() => {});
+      }
+    } else if (tab === 'history') {
+      $('#pane-history').innerHTML =
+        renderHistory(engine.iterations?.() ?? [])
+        + '<div class="label" style="margin:14px 0 6px">Replay</div>'
+        + renderReplay(cache.replay);
+      if (!cache.replay && engine.replayRun) {
+        engine.replayRun().then((r) => { cache.replay = r; markDirty(); }).catch(() => {});
+      }
     } else if (tab === 'errors') {
       $('#pane-errors').innerHTML = renderErrors(errs);
     } else {
@@ -342,6 +385,13 @@ export function createPanel({ root, engine, repaintMs = 500 }) {
    * <details> element every 500ms while the user is reading it.
    */
   const timer = setInterval(() => {
+    /*
+     * Invalidate derived views when the iteration count changes, rather than
+     * on a timer. Analytics only move when an iteration completes, so anything
+     * more frequent is recomputation for its own sake.
+     */
+    const n = engine.iterations?.().length ?? 0;
+    if (n !== cache._n) { cache._n = n; cache.analytics = null; cache.replay = null; }
     if (dirty || engine.memory()?.status === 'running') paint();
   }, repaintMs);
 

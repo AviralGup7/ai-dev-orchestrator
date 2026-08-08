@@ -127,7 +127,37 @@ pre { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; 
 table.summary { width: 100%; border-collapse: collapse; }
 table.summary th { text-align: left; font-weight: 400; color: var(--muted); padding: 5px 0; font-size: 12px; }
 table.summary td { text-align: right; padding: 5px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
-code { font-family: ui-monospace, monospace; font-size: 11px; }
+code { font-family: ui-monospace, monospace; font-size: 11px; background: #11161d; padding: 1px 4px; border-radius: 3px; }
+
+/* mission control */
+.roles, .envstrip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px; margin-bottom: 10px; }
+.role, .envrow { display: flex; align-items: center; gap: 8px; padding: 5px 2px; }
+.role + .role, .envrow + .envrow { border-top: 1px solid var(--line); }
+.roledot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.rolename { font-weight: 500; }
+.rolestate { font-size: 10px; font-weight: 700; letter-spacing: .6px; }
+.envname { min-width: 74px; }
+
+/* scores */
+.scorerow { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.scorename { width: 96px; font-size: 12px; color: var(--muted); }
+.bar { flex: 1; height: 7px; background: #21262d; border-radius: 4px; overflow: hidden; }
+.fill { display: block; height: 100%; border-radius: 4px; }
+.scoreval { width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; }
+.conf { font-size: 9px; width: 58px; text-align: right; letter-spacing: .3px; }
+.scorebasis { font-size: 10px; color: var(--muted); margin: 0 0 4px 104px; }
+
+/* history */
+.itercard { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; margin-bottom: 7px; }
+.itercard > summary { padding: 8px 10px; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+.itercard > summary::-webkit-details-marker { display: none; }
+.iterscore { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--accent); }
+.iterbody { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.iterbody .label { display: inline-block; min-width: 74px; font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+
+/* replay */
+.narrative { border-left: 2px solid var(--line); padding-left: 10px; }
+.narrow { display: flex; gap: 8px; padding: 3px 0; font-size: 12px; align-items: baseline; }
 
 /* landing + preflight */
 .landing, .preflight { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
