@@ -53,11 +53,36 @@ const MAP = {
   'step-retried': 'step-retried',
   'step-skip-requested': 'user-action',
   'step-retry-requested': 'user-action',
+
+  /*
+   * THE RUNNER'S OWN EVENTS.
+   *
+   * These were missing, so every one of them was logged as
+   * "Unmapped engine event ... the log vocabulary is out of date" -- the
+   * bridge's fallback doing exactly its job, and correctly, but it meant a
+   * normal successful run ended with a warning in the Activity Log.
+   *
+   * The fallback is the reason this was visible at all rather than silent,
+   * which is the argument for having written it. It is not an argument for
+   * leaving the map incomplete.
+   */
+  'run-finished': 'workflow-completed',
+  'run-failed': 'iteration-failed',
+  'run-retrying': 'step-retried',
+  'phase-started': 'planning-started',
+  'phase-completed': 'evidence-collected',
+  'phase-skipped': 'step-skipped',
+  'evidence-captured': 'evidence-collected',
+  'recovery-attempt': 'error',
+  'recovery-failed': 'error',
 };
 
 /** Which engine events are failures. Everything else defaults to success. */
-const ERRORS = new Set(['iteration-failed', 'environment-drift', 'run-blocked']);
-const WARNINGS = new Set(['stagnation-detected', 'step-skipped', 'step-retried']);
+const ERRORS = new Set(['iteration-failed', 'environment-drift', 'run-blocked', 'run-failed', 'recovery-failed']);
+const WARNINGS = new Set([
+  'stagnation-detected', 'step-skipped', 'step-retried', 'phase-skipped',
+  'recovery-attempt', 'run-retrying',
+]);
 
 /**
 * Human descriptions. Named `describeLogEvent`, not `describe`: `environment.js`
@@ -73,7 +98,13 @@ function describeLogEvent(type, e) {
     case 'workflow-started':
       return `Run started${e.scope ? ` — scope: ${e.scope}` : ''}`;
     case 'workflow-completed':
-      return e.why || e.reason || 'Run ended';
+      /*
+       * `run-finished` carries its outcome under `verdict`, `run-stopped`
+       * under `why`/`reason`. Both map here, so both shapes are read --
+       * otherwise a completed run logs "Run ended" with no reason, which is
+       * the least useful line in the entire log.
+       */
+      return e.verdict?.why || e.why || e.verdict?.reason || e.reason || 'Run ended';
     case 'workflow-blocked':
       return e.detail || 'The prepared environment changed; waiting for you';
     case 'iteration-started':
@@ -96,10 +127,24 @@ function describeLogEvent(type, e) {
       return `Loop signals: ${(e.signals || []).map((s) => s.kind ?? s).join(', ')}`;
     case 'environment-drift':
       return e.detail || 'The environment no longer matches what was bound';
-    case 'step-skipped':
-      return `You skipped the ${e.phase} phase of iteration ${e.n} — its scores cannot end the run`;
     case 'step-retried':
-      return `Retried the ${e.phase} phase after: ${e.after}`;
+      return e.phase
+        ? `Retried the ${e.phase} phase after: ${e.after}`
+        : `Retrying the run (attempt ${e.attempt ?? '?'}, ${e.consecutive ?? '?'} consecutive failures)`;
+    case 'evidence-collected':
+      if (e.kinds) return `Evidence captured: ${(e.kinds).join(', ') || 'none'} (${e.outcome ?? 'ok'})`;
+      if (e.phase) return `Finished the ${e.phase} phase${e.durationMs ? ` in ${Math.round(e.durationMs / 1000)}s` : ''}`;
+      return 'Evidence collected';
+    case 'planning-started':
+      return e.phase ? `Started the ${e.phase} phase` : 'Phase started';
+    case 'step-skipped':
+      return e.why
+        ? `Skipped the ${e.phase} phase — ${e.why}`
+        : `You skipped the ${e.phase} phase of iteration ${e.n} — its scores cannot end the run`;
+    case 'error':
+      if (e.action) return `Recovery: ${e.outcome} on ${e.phase} — ${e.action} (${e.consecutive} consecutive)`;
+      if (e.detail) return `Recovery gave up: ${e.detail}`;
+      return e.error ?? 'An error occurred';
     case 'user-action':
       return e.type === 'step-skip-requested'
         ? 'Skip requested — the next step will be skipped'

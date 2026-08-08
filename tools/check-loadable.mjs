@@ -92,6 +92,26 @@ for (const file of files.filter((f) => f.endsWith('.js'))) {
    * a note for entry points, an error for the worker itself.
    */
   /*
+   * DYNAMIC import() IS FORBIDDEN IN A SERVICE WORKER.
+   *
+   * The HTML specification disallows it on ServiceWorkerGlobalScope
+   * (w3c/ServiceWorker#1356). This checker evaluates the worker, so it should
+   * have caught it -- and did not, because the one `await import(...)` sat
+   * inside an `environment.check()` callback that only runs during a real run.
+   * Evaluating the module never reached the line.
+   *
+   * The run started, hit its first environment check, and died reporting
+   * `tab-missing: import() is disallowed` -- blaming the user's tabs for a bug
+   * in background.js. A static check is the only thing that finds code on a
+   * path evaluation does not take.
+   */
+  const dynamicImport = /(?<![.\w$])import\s*\(/.exec(code);
+  if (dynamicImport && file.endsWith('background.js')) {
+    const line = code.slice(0, dynamicImport.index).split('\n').length;
+    problems.push(`${file}:${line} uses dynamic import() — disallowed on ServiceWorkerGlobalScope (w3c/ServiceWorker#1356)`);
+  }
+
+  /*
    * TOP-LEVEL await is at COLUMN ZERO. Anything indented is inside a function.
    *
    * The first version matched `^\s*` and therefore flagged every `await` in

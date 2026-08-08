@@ -859,3 +859,62 @@ test('minimum_chrome_version matches the highest API actually used', () => {
   assert.equal(manifest.minimum_chrome_version, '114');
   assert.ok(manifest.side_panel, 'the side panel is what sets that floor');
 });
+
+test('THE WORKER USES NO DYNAMIC import()', () => {
+  /*
+   * `import()` is disallowed on ServiceWorkerGlobalScope by the HTML
+   * specification (w3c/ServiceWorker#1356).
+   *
+   * One `await import('../src/core/environment.js')` sat inside the
+   * environment-check callback. The worker evaluated fine, the run started,
+   * and it died at the first environment check reporting
+   * "tab-missing: import() is disallowed" — blaming the user's tabs for a bug
+   * in background.js.
+   *
+   * `check-loadable.mjs` evaluates the worker and still missed it, because
+   * evaluation never takes that code path. Only a static check finds it.
+   */
+  const src = readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.equal(/(?<![.\w$])import\s*\(/.test(src), false,
+    'every module the worker needs must be a static import');
+});
+
+test('every event the runner emits has a place in the log vocabulary', async () => {
+  /*
+   * Eight runner events were unmapped, so a normal successful run ended with
+   * "Unmapped engine event run-finished — the log vocabulary is out of date".
+   * The fallback did its job and that is why this was visible rather than
+   * silent — but it is not an argument for leaving the map incomplete.
+   */
+  const { bridgeToLogger } = await import('../src/core/bridge.js');
+  const { Logger } = await import('../src/core/logger.js');
+
+  const runnerSrc = readFileSync(new URL('../src/core/runner.js', import.meta.url), 'utf8');
+  const emitted = [...runnerSrc.matchAll(/this\.emit\('([a-z-]+)'/g)].map((m) => m[1]);
+  assert.ok(emitted.length >= 8, 'the runner emits a meaningful number of events');
+
+  const logger = new Logger();
+  const bridge = bridgeToLogger(logger);
+  for (const type of new Set(emitted)) bridge({ type, at: Date.now() });
+
+  const unmapped = logger.live.filter((e) => /Unmapped engine event/.test(e.description));
+  assert.deepEqual(
+    unmapped.map((e) => e.data?.type ?? e.description),
+    [],
+    'no runner event may fall through to the unmapped warning',
+  );
+});
+
+test('a finished run logs WHY it finished, not just that it did', async () => {
+  const { bridgeToLogger } = await import('../src/core/bridge.js');
+  const { Logger } = await import('../src/core/logger.js');
+  const logger = new Logger();
+  bridgeToLogger(logger)({
+    type: 'run-finished', at: Date.now(),
+    verdict: { reason: 'budget-exhausted', why: 'reached the 6-iteration limit' },
+  });
+  assert.match(logger.live[0].description, /reached the 6-iteration limit/,
+    '"Run ended" with no reason is the least useful line in the log');
+});

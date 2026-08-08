@@ -120,6 +120,7 @@ export function bind(snapshot, options = {}) {
   const hosts = options.hosts || {};
   const seen = snapshot?.surfaces || {};
   const problems = [];
+  const notes = [];
   const bound = {};
 
   for (const spec of SURFACES) {
@@ -133,26 +134,54 @@ export function bind(snapshot, options = {}) {
       continue; // an optional surface that is absent is simply not bound
     }
 
+    /*
+     * AN UNREQUIRED SURFACE CANNOT BLOCK THE BIND.
+     *
+     * This validated every surface it could SEE, not every surface the run
+     * NEEDS. So a DeepSeek tab sitting on the home page -- with the reviewer
+     * disabled and therefore irrelevant -- threw
+     * "conversation-changed: not on an existing conversation" and refused to
+     * start the run.
+     *
+     * Worse, it disagreed with preflight, which correctly only checked the
+     * required surfaces: the user saw "all 9 checks passed", pressed Start,
+     * and got a hard refusal naming a tab that did not matter. Two checks
+     * answering the same question differently is worse than either being
+     * wrong, because there is no way to tell which to believe.
+     *
+     * An unrequired surface that is present but unusable is now simply not
+     * bound. Nothing will drive it -- which is exactly right, because nothing
+     * was going to.
+     */
+    const problemsBefore = problems.length;
+    const skipIfBroken = !isRequired;
+
     const expected = hosts[spec.key];
     const host = hostOf(s.url);
 
+    /*
+     * Each check below records a problem and stops evaluating THIS surface.
+     * `fail()` exists so the unrequired-surface discard above is reached
+     * rather than jumped over -- an early `continue` skipped it, which is how
+     * the original bug survived.
+     */
+    let failed = false;
+    const fail = (kind, detail) => {
+      problems.push(problem(spec.key, spec.label, kind, detail));
+      failed = true;
+    };
+
     if (s.tabId === undefined || s.tabId === null) {
-      problems.push(problem(spec.key, spec.label, 'tab-missing', 'reported without a tab id'));
-      continue;
+      fail('tab-missing', 'reported without a tab id');
     }
-    if (expected?.length && !expected.includes(host)) {
-      problems.push(
-        problem(spec.key, spec.label, 'navigated-away', `tab is on "${host || 'unknown'}", expected ${expected.join(' or ')}`),
-      );
-      continue;
+    if (!failed && expected?.length && !expected.includes(host)) {
+      fail('navigated-away', `tab is on "${host || 'unknown'}", expected ${expected.join(' or ')}`);
     }
-    if (s.signedIn === false) {
-      problems.push(problem(spec.key, spec.label, 'signed-out', 'the tab reports no active session'));
-      continue;
+    if (!failed && s.signedIn === false) {
+      fail('signed-out', 'the tab reports no active session');
     }
-    if (s.ready === false) {
-      problems.push(problem(spec.key, spec.label, 'not-ready', 'the page has not finished loading'));
-      continue;
+    if (!failed && s.ready === false) {
+      fail('not-ready', 'the page has not finished loading');
     }
     /*
      * A MISSING CONVERSATION ID IS A HARD FAILURE, NOT A DETAIL.
@@ -163,10 +192,19 @@ export function bind(snapshot, options = {}) {
      * any code ever calling something that looks like "create". The absence of
      * an id is the only signal available before the damage is done.
      */
-    if (!s.conversationId) {
-      problems.push(
-        problem(spec.key, spec.label, 'conversation-changed', 'the tab is not on an existing conversation (no id)'),
-      );
+    if (!failed && !s.conversationId) {
+      fail('conversation-changed', 'the tab is not on an existing conversation (no id)');
+    }
+
+    if (failed && !skipIfBroken) continue;
+
+    /*
+     * If an unrequired surface produced problems, discard them and leave it
+     * unbound rather than failing the whole environment.
+     */
+    if (skipIfBroken && problems.length > problemsBefore) {
+      problems.length = problemsBefore;
+      notes.push(`${spec.label} was found but is not usable, and is not required — it will not be driven`);
       continue;
     }
 
@@ -195,7 +233,7 @@ export function bind(snapshot, options = {}) {
   }
 
   if (problems.length) throw new EnvironmentError(problems);
-  return { boundAt: Date.now(), surfaces: bound };
+  return { boundAt: Date.now(), surfaces: bound, notes };
 }
 
 /**

@@ -335,3 +335,99 @@ test('onDrift fires exactly once, so the user is not spammed while halted', asyn
   await assert.rejects(() => guard.act('paste-prompt', 'manager'));
   assert.equal(drifts, 1);
 });
+
+/* ============================== unrequired surfaces (session 11) ========= */
+
+test('AN UNREQUIRED SURFACE CANNOT BLOCK THE BIND', async () => {
+  /*
+   * THE REPORTED BUG. Preflight said "all 9 checks passed", the user pressed
+   * Start, and bind() refused with
+   * "DeepSeek: the tab is not on an existing conversation".
+   *
+   * The reviewer was not required — it was not in `require` — but bind()
+   * validated every surface it could SEE rather than every surface the run
+   * NEEDS. So an idle DeepSeek tab, entirely irrelevant to the run, stopped
+   * it dead.
+   *
+   * Worse than the refusal: it CONTRADICTED preflight, which correctly checked
+   * only the required surfaces. Two checks answering the same question
+   * differently is worse than either being wrong, because there is no way to
+   * tell which to believe.
+   */
+  const idleReviewer = healthy({ reviewer: { url: 'https://chat.deepseek.com/', conversationId: null } });
+  const b = bind(idleReviewer, { require: ['manager', 'engineer'], hosts: HOSTS });
+
+  assert.ok(b.surfaces.manager, 'the required surfaces bind');
+  assert.ok(b.surfaces.engineer);
+  assert.equal(b.surfaces.reviewer, undefined, 'the unusable optional surface is simply not bound');
+  assert.ok(b.notes.some((n) => /not usable, and is not required/.test(n)),
+    'and the fact is recorded rather than silently dropped');
+});
+
+test('an unrequired surface that IS usable still binds', () => {
+  const b = bind(healthy(), { require: ['manager', 'engineer'], hosts: HOSTS });
+  assert.ok(b.surfaces.reviewer, 'a healthy optional surface is bound and can be driven');
+});
+
+test('a REQUIRED surface in the same broken state still refuses', () => {
+  /*
+   * The fix must not weaken the contract. The distinction is "is this surface
+   * needed", not "is this surface present".
+   */
+  const idleReviewer = healthy({ reviewer: { url: 'https://chat.deepseek.com/', conversationId: null } });
+  assert.throws(
+    () => bind(idleReviewer, { require: ['manager', 'engineer', 'reviewer'], hosts: HOSTS }),
+    (err) => {
+      assert.equal(err.problems[0].surface, 'reviewer');
+      assert.match(err.problems[0].detail, /not on an existing conversation/);
+      return true;
+    },
+  );
+});
+
+test('every failure kind on an unrequired surface is tolerated', () => {
+  /*
+   * Signed out, navigated away, not ready — none of them matter for a surface
+   * nothing will drive. An early `continue` in the original skipped past the
+   * discard, which is precisely how the bug survived; each branch is checked.
+   */
+  const broken = [
+    { signedIn: false },
+    { url: 'https://example.com/' },
+    { ready: false },
+    { conversationId: null },
+  ];
+  for (const over of broken) {
+    const snap = healthy({ reviewer: { ...over } });
+    const b = bind(snap, { require: ['manager', 'engineer'], hosts: HOSTS });
+    assert.equal(b.surfaces.reviewer, undefined, `reviewer with ${JSON.stringify(over)} must not block`);
+    assert.equal(Object.keys(b.surfaces).length, 2);
+  }
+});
+
+test('preflight and bind agree about which surfaces matter', async () => {
+  /*
+   * The contradiction is the real bug; this pins the agreement. Whatever
+   * preflight passes, bind must accept.
+   */
+  const { preflight } = await import('../src/core/preflight.js');
+  const { Logger } = await import('../src/core/logger.js');
+  const { MemoryLogSink } = await import('../src/core/logsink.js');
+  const { MemoryStore } = await import('../src/core/store.js');
+
+  const snapshot = healthy({ reviewer: { url: 'https://chat.deepseek.com/', conversationId: null } });
+  const result = await preflight({
+    setup: { mode: 'explore', prompt: '' },
+    snapshot,
+    hosts: HOSTS,
+    reviewerEnabled: false,
+    logger: new Logger({ sink: new MemoryLogSink() }),
+    store: new MemoryStore(),
+  });
+
+  assert.equal(result.ok, true, 'preflight passes');
+  assert.doesNotThrow(
+    () => bind(snapshot, { require: ['manager', 'engineer'], hosts: HOSTS }),
+    'so bind must not then refuse the very same environment',
+  );
+});

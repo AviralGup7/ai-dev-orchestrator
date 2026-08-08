@@ -51,7 +51,7 @@ import { ReviewerAdapter } from '../src/adapters/reviewer.js';
 import { Runner } from '../src/core/runner.js';
 import { ProjectStore } from '../src/core/projectstore.js';
 import { ChromeKeyValue } from './kvstore.js';
-import { bind } from '../src/core/environment.js';
+import { bind, verify } from '../src/core/environment.js';
 import { analyse } from '../src/core/analytics.js';
 import { replay, narrate } from '../src/core/replay.js';
 import { scanTab } from './scan.js';
@@ -362,8 +362,21 @@ async function ensureRunner(setup = null) {
     store: projectStore,
     environment: {
       async check() {
+        /*
+         * `verify` is imported STATICALLY at the top of this file.
+         *
+         * It was `await import(...)` here, which is disallowed on
+         * ServiceWorkerGlobalScope by the HTML specification
+         * (w3c/ServiceWorker#1356). The run started, reached its first
+         * environment check, and died with:
+         *
+         *   "import() is disallowed on ServiceWorkerGlobalScope"
+         *
+         * reported as `tab-missing` -- so the message blamed the user's tabs
+         * for a bug in this file. Every module a worker needs must be a
+         * static import; there is no lazy loading in this context.
+         */
         const snap = await snapshotEnvironment();
-        const { verify } = await import('../src/core/environment.js');
         return verify(binding, snap);
       },
     },
