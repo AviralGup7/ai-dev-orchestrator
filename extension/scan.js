@@ -24,13 +24,15 @@
  * something is already wrong.
  */
 
+import { SELECTORS } from '../src/transports/dom.js';
+
 /**
  * The function injected into the page.
  *
  * Self-contained on purpose: `executeScript` serialises it, so it may not
  * close over anything from this module.
  */
-export function scanPage({ maxNodes = 400, maxDepth = 12, maxText = 400 } = {}) {
+export function scanPage(selectors = { composer: [], send: [], stop: [], turns: [] }, { maxNodes = 400, maxDepth = 40, maxText = 400 } = {}) {
   const out = {
     at: Date.now(),
     url: location.href,
@@ -104,15 +106,58 @@ export function scanPage({ maxNodes = 400, maxDepth = 12, maxText = 400 } = {}) 
     return d;
   };
 
-  const all = document.querySelectorAll(INTERESTING);
-  for (const el of all) {
-    if (out.nodes.length >= maxNodes) break;
-    if (depthOf(el) > maxDepth) { out.depthCapped = true; continue; }
+  /*
+   * RANK BEFORE TRUNCATING.
+   *
+   * The first version walked the document in order and stopped at 400 nodes.
+   * On a real Arena page -- 113,671 elements, 5,245 buttons -- that budget was
+   * entirely consumed by sidebar chrome ("Toggle Sidebar", eleven hidden "More
+   * options") before reaching the composer. The capture was technically
+   * correct and diagnostically worthless: it could not answer the one question
+   * a scan exists to answer, which is "where is the composer and can it be
+   * typed into".
+   *
+   * Depth 12 made it worse: the composer in a React app of that size sits far
+   * deeper, so it was not merely out-budget, it was excluded outright.
+   *
+   * So: score every candidate by how likely it is to matter, sort, then take
+   * the top N. A composer, a send button and a visible error beat a hidden
+   * sidebar toggle regardless of where they appear in the DOM.
+   */
+  const score = (el, box, hidden) => {
+    let n = 0;
+    if (el.isContentEditable || el.tagName === 'TEXTAREA') n += 100;
+    if (el.getAttribute('data-testid')) n += 40;
+    const label = `${el.getAttribute('aria-label') || ''} ${el.getAttribute('placeholder') || ''}`.toLowerCase();
+    if (/send|submit|message|prompt|ask|chat|run/.test(label)) n += 60;
+    if (/stop|cancel|abort/.test(label)) n += 50;
+    if (el.tagName === 'FORM') n += 30;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') n += 25;
+    if (el.id) n += 15;
+    if (hidden) n -= 40;
+    /* Controls near the bottom of the viewport are usually the composer. */
+    if (!hidden && box.top > innerHeight * 0.5) n += 20;
+    if (box.width > 200 && box.height > 20) n += 10;
+    return n;
+  };
 
+  const candidates = [];
+  for (const el of document.querySelectorAll(INTERESTING)) {
+    if (depthOf(el) > maxDepth) { out.depthCapped = true; continue; }
     const box = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
-    const hidden = style.display === 'none' || style.visibility === 'hidden' ||
-      Number(style.opacity) === 0 || (box.width === 0 && box.height === 0);
+    const st = getComputedStyle(el);
+    const hidden = st.display === 'none' || st.visibility === 'hidden' ||
+      Number(st.opacity) === 0 || (box.width === 0 && box.height === 0);
+    candidates.push({ el, box, st, hidden, rank: score(el, box, hidden) });
+  }
+  candidates.sort((a, b) => b.rank - a.rank);
+  out.considered = candidates.length;
+
+  for (const c of candidates) {
+    if (out.nodes.length >= maxNodes) break;
+    const el = c.el;
+
+    const { box, hidden } = c;
 
     out.nodes.push({
       path: pathOf(el),
@@ -131,6 +176,7 @@ export function scanPage({ maxNodes = 400, maxDepth = 12, maxText = 400 } = {}) 
       hidden: hidden || undefined,
       editable: el.isContentEditable || el.tagName === 'TEXTAREA' || undefined,
       box: { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) },
+      rank: c.rank,
     });
   }
 
@@ -146,6 +192,21 @@ export function scanPage({ maxNodes = 400, maxDepth = 12, maxText = 400 } = {}) 
     iframes: document.querySelectorAll('iframe').length,
   };
 
+  /*
+   * Whether the transport's own selectors resolve, reported directly.
+   *
+   * The scan is read by a human trying to fix a broken selector, and "is the
+   * selector I ship actually matching anything on this page" is the question
+   * they have. Answering it from a node dump is guesswork; answering it here
+   * is one line.
+   */
+  out.selectorCheck = {
+    composer: selectors.composer.map((sel) => ({ sel, found: Boolean(document.querySelector(sel)) })),
+    send: selectors.send.map((sel) => ({ sel, found: Boolean(document.querySelector(sel)) })),
+    stop: selectors.stop.map((sel) => ({ sel, found: Boolean(document.querySelector(sel)) })),
+    turns: selectors.turns.map((sel) => ({ sel, count: document.querySelectorAll(sel).length })),
+  };
+
   return out;
 }
 
@@ -159,13 +220,24 @@ export function scanPage({ maxNodes = 400, maxDepth = 12, maxText = 400 } = {}) 
  * real capability and the install prompt should reflect it honestly.
  *
  * @param {number} tabId
- * @param {object} [options]
+ * @param {object} [options]  may carry `surface` so the right selectors are checked
  */
 export async function scanTab(tabId, options = {}) {
+  const { surface, ...opts } = options;
   const [result] = await chrome.scripting.executeScript({
     target: { tabId },
     func: scanPage,
-    args: [options],
+    /*
+     * `selectors` is passed explicitly. The selectorCheck block inside
+     * scanPage reads it, and the injected function is SERIALISED — it closes
+     * over nothing, so anything it needs must arrive as an argument.
+     *
+     * Omitting it threw `selectors is not defined` inside the page, which
+     * surfaces as a failed scan at the exact moment a scan is being taken
+     * because something else already went wrong. Caught by a test that drives
+     * the real injected function rather than asserting on its source.
+     */
+    args: [SELECTORS[surface] ?? { composer: [], send: [], stop: [], turns: [] }, opts],
     /*
      * MAIN world, not the isolated one.
      *

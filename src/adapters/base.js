@@ -73,19 +73,31 @@ export const DEFAULT_POLICY = {
    */
   schemaRetries: 1,
   /*
-   * 240s, NOT 300s.
+   * PER-ROLE BUDGETS, BECAUSE THE ROLES ARE NOT COMPARABLE.
    *
-   * Chrome terminates a service worker when "a single request, such as an
-   * event or API call, takes longer than 5 minutes to process". 300_000ms sat
-   * exactly on that ceiling: a single slow Arena reply would race Chrome's own
-   * kill timer, and which one won would depend on scheduling noise.
+   * A single flat timeout was wrong in a way that only showed against a real
+   * Arena. Asking ChatGPT for a plan is one inference -- seconds. Asking Arena
+   * to explore a repository, run a build and run a test suite is REAL WORK,
+   * and the user reports it can take HOURS.
    *
-   * A run is no longer one event (see extension/background.js), so this is now
-   * belt-and-braces rather than the only defence -- but a per-response budget
-   * comfortably under the platform limit means a timeout is OUR timeout, with
-   * our error message and our retry, rather than a silent worker death.
+   * The 240s budget killed exactly that: the log shows the prompt pasted and
+   * submitted correctly, then "engineer produced no reply within 240000ms"
+   * after four minutes of an engineering task that had barely started. The
+   * transport was working perfectly; the deadline was a fiction.
+   *
+   * Note this is NOT the Chrome 5-minute limit -- that applies to a single
+   * event, and the run is already detached (see extension/background.js), so
+   * a long wait is not one event. The only thing keeping the worker alive is
+   * the heartbeat, which is why waiting hours is now safe where it was not
+   * before.
    */
-  timeoutMs: 240_000,
+  timeoutMs: 240_000,          // default for conversational roles
+  /** Per-surface overrides. The engineer does work; the others answer. */
+  timeouts: {
+    manager: 240_000,          // 4 minutes: a plan or an evaluation
+    reviewer: 240_000,         // 4 minutes: a strategic opinion
+    engineer: 4 * 3600_000,    // 4 HOURS: a build, a suite, a repository
+  },
   /** Backoff between transport retries. Bounded; never a fixed long sleep. */
   backoffMs: 2_000,
 };
@@ -193,7 +205,7 @@ export class Adapter {
         const res = await this.transport.send({
           prompt,
           surface: this.surface,
-          timeoutMs: this.policy.timeoutMs,
+          timeoutMs: this.policy.timeouts?.[this.surface] ?? this.policy.timeoutMs,
         });
         const text = typeof res === 'string' ? res : res?.text;
 

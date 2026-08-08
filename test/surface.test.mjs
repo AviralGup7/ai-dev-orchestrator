@@ -13,6 +13,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   ScanBudget, boundCapture, renderCapture, diffCaptures, describeCapture,
@@ -316,4 +317,132 @@ test('the journal redacts a capture again on the way out', () => {
     data: { capture: { surface: 'x' }, markdown: 'token ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBB' },
   });
   assert.equal(/ghp_B/.test(j.render(null, null)), false);
+});
+
+/* ============================ ranking on a real page (session 12) ======= */
+
+test('THE COMPOSER SURVIVES TRUNCATION ON A HUGE PAGE', async () => {
+  /*
+   * THE REPORTED FAILURE. A real Arena page reported 113,671 elements and
+   * 5,245 buttons. The scan captured 22 nodes — all sidebar chrome: "Toggle
+   * Sidebar" and eleven hidden "More options". The composer never appeared.
+   *
+   * The capture was technically correct and diagnostically worthless: it could
+   * not answer the only question a scan exists to answer, which is "where is
+   * the composer and can it be typed into". Document order filled the budget
+   * with noise before reaching anything that mattered.
+   *
+   * Ranking must put the composer in the capture even when it is element
+   * 90,000 of 113,671.
+   */
+  const noise = Array.from({ length: 5000 }, (_, i) => ({
+    path: `div > button#sidebar-${i}`, tag: 'BUTTON',
+    label: i % 2 ? 'More options' : 'Toggle Sidebar',
+    hidden: i % 2 === 1,
+    box: { x: 0, y: 10, w: 24, h: 24 },
+    rank: -30,
+  }));
+  const composer = {
+    path: 'main > form > div > textarea', tag: 'TEXTAREA', testid: 'composer',
+    label: 'Message Arena…', editable: true,
+    box: { x: 280, y: 820, w: 940, h: 56 },
+    rank: 210,
+  };
+  const send = {
+    path: 'main > form > button', tag: 'BUTTON', testid: 'send-button', label: 'Send',
+    box: { x: 1240, y: 826, w: 44, h: 44 }, rank: 130,
+  };
+
+  /*
+   * The scanner sorts before truncating, so the bounded capture is fed
+   * already-ranked nodes. This asserts the BOUNDING step keeps what matters
+   * rather than the first N.
+   */
+  const { capture } = boundCapture({
+    ...rawCapture(),
+    counts: { elements: 113671, inputs: 3, buttons: 5245, iframes: 5 },
+    nodes: [composer, send, ...noise].sort((a, b) => b.rank - a.rank),
+  });
+
+  const rendered = renderCapture(capture);
+  assert.match(rendered, /composer/, 'the composer must survive truncation');
+  assert.match(rendered, /send-button/, 'and so must the send control');
+  assert.ok(capture.truncated.nodes > 4000, 'the noise is dropped and the drop is reported');
+});
+
+test('the scanner ranks a composer above sidebar chrome', async () => {
+  /*
+   * The ranking itself, run against the shape of the real page. Exercised
+   * through the injected function with a minimal DOM rather than asserted
+   * from the source, because the source is a string until it runs.
+   */
+  const { scanPage } = await import('../extension/scan.js');
+
+  const el = (tag, attrs = {}, depth = 20) => ({
+    tagName: tag,
+    id: attrs.id || '',
+    disabled: attrs.disabled || false,
+    isContentEditable: attrs.editable || false,
+    innerText: attrs.text || '',
+    value: '',
+    parentElement: depth > 0 ? el('DIV', {}, depth - 1) : null,
+    getAttribute: (k) => attrs[k] ?? null,
+    getBoundingClientRect: () => attrs.box || { x: 0, y: 0, width: 24, height: 24, top: 10, left: 0 },
+  });
+
+  const composer = el('TEXTAREA', {
+    'data-testid': 'composer', placeholder: 'Message Arena…', editable: true,
+    box: { x: 280, y: 820, width: 940, height: 56, top: 820, left: 280 },
+  }, 25);
+  const sidebar = el('BUTTON', { 'aria-label': 'Toggle Sidebar' }, 4);
+
+  const nodes = [sidebar, composer];
+  globalThis.document = {
+    querySelector: () => null,
+    querySelectorAll: (sel) => (sel.includes('textarea') || sel.includes('data-testid') ? nodes : []),
+    title: 'Arena',
+    body: { innerText: '' },
+    documentElement: {},
+    visibilityState: 'visible',
+    readyState: 'complete',
+  };
+  globalThis.location = { href: 'https://arena.ai/agent/019fa9f8' };
+  globalThis.getComputedStyle = () => ({ display: 'block', visibility: 'visible', opacity: '1' });
+  globalThis.innerWidth = 1512;
+  globalThis.innerHeight = 944;
+  globalThis.scrollX = 0;
+  globalThis.scrollY = 0;
+
+  /*
+   * `scanPage(selectors, options)` — the selectors argument is required; the
+   * injected function reads it for both the probe and the selectorCheck.
+   */
+  const { SELECTORS } = await import('../src/transports/dom.js');
+  const out = scanPage(SELECTORS.engineer, { maxNodes: 1, maxDepth: 40 });
+  assert.equal(out.nodes.length, 1, 'budget of one node');
+  assert.equal(out.nodes[0].testid, 'composer',
+    'with room for exactly one element it must keep the composer, not the sidebar toggle');
+});
+
+test('a deep composer is not excluded by the depth cap', async () => {
+  /*
+   * Depth 12 excluded the composer outright on a real React app of that size —
+   * it was not merely out of budget, it was never a candidate.
+   */
+  const scanSrc = readFileSync(new URL('../extension/scan.js', import.meta.url), 'utf8');
+  const m = /maxDepth = (\d+)/.exec(scanSrc);
+  assert.ok(m, 'maxDepth must be declared');
+  assert.ok(Number(m[1]) >= 30,
+    `maxDepth is ${m[1]} — a composer in a real React tree sits deeper than that`);
+});
+
+test('the capture reports whether the shipped selectors matched', async () => {
+  /*
+   * The scan is read by a human fixing a broken selector, and their question
+   * is "does the selector I ship match anything on this page". Answering that
+   * from a node dump is guesswork.
+   */
+  const scanSrc = readFileSync(new URL('../extension/scan.js', import.meta.url), 'utf8');
+  assert.match(scanSrc, /selectorCheck/);
+  assert.match(scanSrc, /composer: selectors\.composer\.map/);
 });

@@ -88,6 +88,21 @@ export function currentStep(memory, lastEvent = null) {
    * difference between "no unexplained waiting" and a panel that says
    * `execute` for six minutes.
    */
+  /*
+   * A progress heartbeat keeps the step description live during a long wait.
+   * Without this the panel shows the same "Waiting for AI response" line for
+   * four hours and is indistinguishable from a hung extension.
+   */
+  if (lastEvent?.type === 'response-progress') {
+    return {
+      text: `Waiting for ${lastEvent.data?.surface ?? 'the engineer'}`,
+      why: `${Math.round((lastEvent.data?.elapsedMs ?? 0) / 60_000)} minutes elapsed`
+        + (lastEvent.data?.chars ? `, ${lastEvent.data.chars} characters received so far` : ', no output yet'),
+      source: lastEvent.source,
+      since: (lastEvent.at ?? Date.now()) - (lastEvent.data?.elapsedMs ?? 0),
+    };
+  }
+
   if (lastEvent?.status === 'pending') {
     return {
       text: lastEvent.label,

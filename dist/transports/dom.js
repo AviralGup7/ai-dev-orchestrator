@@ -66,12 +66,24 @@ export const SELECTORS = {
 
 export const DEFAULTS = {
   /**
-   * How long the whole exchange may take.
-   *
-   * Kept under Chrome's five-minute single-event ceiling. See the note in
-   * adapters/base.js -- 300s raced the platform's own kill timer.
+   * How long the whole exchange may take. Overridden per surface by the
+   * adapter -- the engineer gets hours, because it is doing real work.
    */
   timeoutMs: 240_000,
+  /**
+   * How long a reply may show NO SIGN OF LIFE before it is called dead.
+   *
+   * This is the number that actually matters for a long task, and the reason
+   * a multi-hour budget is safe rather than reckless. A four-hour deadline
+   * with no liveness check means a genuinely crashed page is waited on for
+   * four hours. A liveness window means: wait as long as the work takes, but
+   * give up promptly once the page stops changing entirely.
+   *
+   * 15 minutes is deliberately generous. A build with no streamed output can
+   * be silent for a long time, and killing real work is far more expensive
+   * than waiting too long for dead work.
+   */
+  silenceMs: 15 * 60_000,
   /** How often to look. */
   pollMs: 750,
   /** Text must be unchanged this long before the reply counts as finished. */
@@ -126,7 +138,8 @@ export class DomTransport {
   }
 
   async send({ prompt, surface, timeoutMs = this.config.timeoutMs }) {
-    const deadline = this.now() + timeoutMs;
+    const startedAt = this.now();
+    const deadline = startedAt + timeoutMs;
 
     /* -- 1. is the page usable? ----------------------------------------- */
     const before = await this.readState(surface);
@@ -177,7 +190,7 @@ export class DomTransport {
     this.emit('response-started', { surface });
 
     /* -- 4. wait for it to finish --------------------------------------- */
-    const text = await this.awaitCompletion(surface, deadline);
+    const text = await this.awaitCompletion(surface, deadline, startedAt);
     if (!text?.trim()) {
       throw new TransportError('failed', `${surface} produced an empty reply`);
     }
@@ -194,13 +207,66 @@ export class DomTransport {
    * that parses is far worse than one that fails, because the truncation is
    * invisible downstream.
    */
-  async awaitCompletion(surface, deadline) {
+  async awaitCompletion(surface, deadline, startedAt = this.now()) {
     let lastText = '';
     let stableSince = null;
     let sawBusy = false;
+    /*
+     * LIVENESS, TRACKED SEPARATELY FROM COMPLETION.
+     *
+     * `lastChange` is the last moment ANYTHING moved -- text grew, or the page
+     * reported itself busy. A long task is expected to be slow; it is not
+     * expected to be frozen. Distinguishing the two is what makes a four-hour
+     * budget defensible instead of reckless.
+     */
+    let lastChange = this.now();
+    let reportedProgress = 0;
 
     while (this.now() < deadline) {
       const s = await this.readState(surface);
+
+      /*
+       * PROGRESS IS EMITTED, NOT JUST OBSERVED.
+       *
+       * A user watching a four-hour task needs to see that it is alive. The
+       * Activity Log previously showed nothing between "submitted" and either
+       * a reply or a timeout -- for hours. That is the "no unexplained
+       * waiting" rule broken by the very case it was written for.
+       */
+      /*
+       * Elapsed comes from the ACTUAL start, passed in.
+       *
+       * It was reconstructed as `deadline - config.timeoutMs`, which silently
+       * assumes the caller used the default budget. With the engineer's
+       * four-hour budget that arithmetic produced a large negative number, so
+       * the progress threshold was never crossed and not one heartbeat was
+       * emitted during exactly the wait they exist for. Caught by a test, not
+       * by reading.
+       */
+      const elapsed = this.now() - startedAt;
+      if (elapsed - reportedProgress >= 60_000) {
+        reportedProgress = elapsed;
+        this.emit('response-progress', {
+          surface,
+          elapsedMs: elapsed,
+          chars: s.lastText.length,
+          busy: s.busy,
+          silentMs: this.now() - lastChange,
+        });
+      }
+
+      if (s.busy || s.lastText !== lastText) lastChange = this.now();
+
+      /*
+       * Dead, not slow. Checked before the completion logic so a frozen page
+       * fails with an accurate reason rather than eventually hitting the
+       * outer deadline and reporting "still generating".
+       */
+      if (this.now() - lastChange > this.config.silenceMs) {
+        throw new TransportError('timed-out',
+          `${surface} showed no sign of life for ${Math.round(this.config.silenceMs / 60_000)} minutes`,
+          { phase: 'silent', chars: lastText.length, sawBusy });
+      }
 
       if (s.busy) {
         sawBusy = true;

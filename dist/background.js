@@ -211,7 +211,11 @@ async function maybeScan(event) {
 
   budget.begin(surface);
   try {
-    const raw = await scanTab(tabId, { maxNodes: budget.config.maxNodes, maxDepth: budget.config.maxDepth });
+    const raw = await scanTab(tabId, {
+      surface,
+      maxNodes: budget.config.maxNodes,
+      maxDepth: budget.config.maxDepth,
+    });
     const bounded = boundCapture({ ...raw, surface }, budget.config);
     if (!bounded.ok) throw new Error(bounded.problem);
 
@@ -396,6 +400,7 @@ const TRANSPORT_EVENTS = {
   'prompt-pasted': 'prompt-pasted',
   'prompt-submitted': 'prompt-submitted',
   'response-started': 'awaiting-response',
+  'response-progress': 'response-progress',
   'response-complete': 'response-received',
   'response-settled': 'response-received',
   'waiting-for-idle': 'awaiting-response',
@@ -420,6 +425,12 @@ function describeTransport(e) {
     case 'prompt-pasted': return `Pasted ${e.chars} characters into the ${e.surface} composer`;
     case 'prompt-submitted': return `Submitted the prompt to ${e.surface}`;
     case 'response-started': return `${e.surface} began responding`;
+    case 'response-progress': {
+      const mins = Math.round(e.elapsedMs / 60_000);
+      const quiet = Math.round(e.silentMs / 60_000);
+      return `${e.surface} still working — ${mins}m elapsed, ${e.chars} characters so far` +
+        (e.busy ? ' (generating)' : quiet >= 2 ? `, quiet for ${quiet}m` : '');
+    }
     case 'response-complete': return `${e.surface} replied (${e.chars} characters)`;
     case 'waiting-for-idle': return `Waiting for ${e.surface} to finish a previous response`;
     default: return e.type;

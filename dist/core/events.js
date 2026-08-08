@@ -92,6 +92,13 @@ export const EVENT_TYPES = /** @type {const} */ ({
   'prompt-submitted': { channel: 'automation', source: 'extension', label: 'Prompt submitted' },
   'awaiting-response': { channel: 'automation', source: 'extension', label: 'Waiting for AI response' },
   'response-received': { channel: 'automation', source: 'extension', label: 'Response received' },
+  /*
+   * Emitted every minute while waiting. A four-hour engineering task
+   * previously produced NOTHING in the Activity Log between "submitted" and
+   * either a reply or a timeout -- the "no unexplained waiting" rule broken by
+   * exactly the case it exists for.
+   */
+  'response-progress': { channel: 'automation', source: 'extension', label: 'Still working' },
   'file-downloaded': { channel: 'automation', source: 'extension', label: 'File downloaded' },
   'file-uploaded': { channel: 'automation', source: 'extension', label: 'File uploaded' },
   'scrolled': { channel: 'automation', source: 'extension', label: 'Scrolled' },

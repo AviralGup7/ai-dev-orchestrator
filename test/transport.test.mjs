@@ -229,3 +229,123 @@ test('the transport satisfies the same contract as the simulator', async () => {
   const out = await dom.send({ prompt: 'p', surface: 'manager' });
   assert.equal(typeof out.text, 'string');
 });
+
+/* ================================ long-running tasks (session 12) ======= */
+
+test('A MULTI-HOUR ENGINEERING TASK IS NOT KILLED AT FOUR MINUTES', async () => {
+  /*
+   * THE REPORTED BUG. A real Arena exploration task was cut off with
+   * "engineer produced no reply within 240000ms". The log shows the prompt
+   * pasted and submitted correctly — the transport worked perfectly and the
+   * deadline was a fiction.
+   *
+   * Asking ChatGPT for a plan is one inference. Asking Arena to explore a
+   * repository, build it and run its suite is real work that the user reports
+   * can take hours. One flat budget for both was never defensible.
+   */
+  const { DEFAULT_POLICY } = await import('../src/adapters/base.js');
+  assert.ok(DEFAULT_POLICY.timeouts.engineer >= 2 * 3600_000,
+    `engineer budget is ${DEFAULT_POLICY.timeouts.engineer}ms — a build and a test suite need hours`);
+  assert.ok(DEFAULT_POLICY.timeouts.manager <= 600_000,
+    'a conversational role must NOT inherit the hours-long budget');
+  assert.ok(DEFAULT_POLICY.timeouts.engineer > DEFAULT_POLICY.timeouts.manager * 10,
+    'the roles are not comparable and their budgets must reflect that');
+});
+
+test('the adapter sends its own per-surface budget, not the default', async () => {
+  const { Adapter } = await import('../src/adapters/base.js');
+  const seen = [];
+  class Engineer extends Adapter {
+    get role() { return 'engineer'; }
+    get surface() { return 'engineer'; }
+  }
+  const a = new Engineer({
+    transport: { send: async (args) => { seen.push(args.timeoutMs); return { text: 'ok' }; } },
+  });
+  await a.sendWithRetries('p', { what: 'x', iteration: 1 });
+  assert.ok(seen[0] >= 2 * 3600_000, `engineer was sent ${seen[0]}ms`);
+});
+
+test('a SILENT page fails promptly instead of waiting out the whole budget', async () => {
+  /*
+   * The counterpart to a long budget. Four hours with no liveness check means
+   * a genuinely crashed page is waited on for four hours. "Wait as long as the
+   * work takes, but give up once nothing is moving at all" is the only version
+   * of a long budget that is safe rather than reckless.
+   */
+  const frozen = Array.from({ length: 500 }, () =>
+    ({ composer: true, busy: false, turns: 2, lastText: 'started and then froze' }));
+  const f = fakePage([frame(), ...frozen]);
+  const t = new DomTransport({
+    page: f.page, now: f.now, wait: f.wait,
+    config: { silenceMs: 60_000, quietMs: 999_999_999 },
+  });
+
+  await assert.rejects(
+    () => t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 }),
+    (err) => {
+      assert.equal(err.outcome, 'timed-out');
+      assert.equal(err.detail.phase, 'silent', 'the reason must say "frozen", not "still generating"');
+      assert.match(err.message, /no sign of life/);
+      return true;
+    },
+  );
+  assert.ok(f.now() < 4 * 3600_000, 'it must not burn the full four-hour budget on a dead page');
+});
+
+test('a slow but LIVE task keeps its budget', async () => {
+  /*
+   * The distinction that makes the whole design work: silence resets whenever
+   * anything moves. A task that emits a line every few minutes for an hour is
+   * working, not frozen.
+   */
+  /*
+   * The fixture must run LONGER than silenceMs, or it proves nothing: a task
+   * that finishes inside the silence window survives whether or not the reset
+   * works. Sabotaging the reset left the suite green until this was widened.
+   *
+   * 400 polls at 750ms is ~5 minutes of simulated work against a 60s silence
+   * window — so only a working reset can carry it to the end.
+   */
+  const slow = [];
+  for (let i = 0; i < 400; i++) {
+    slow.push({ composer: true, busy: true, turns: 2, lastText: `building… step ${i}` });
+  }
+  slow.push(...Array.from({ length: 8 }, () =>
+    ({ composer: true, busy: false, turns: 2, lastText: 'done, all tests pass' })));
+
+  const f = fakePage([frame(), ...slow]);
+  const t = new DomTransport({
+    page: f.page, now: f.now, wait: f.wait,
+    config: { silenceMs: 60_000 },
+  });
+  const out = await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 });
+  assert.equal(out.text, 'done, all tests pass', 'steady progress must not be mistaken for silence');
+});
+
+test('progress is REPORTED during a long wait, not just endured', async () => {
+  /*
+   * The Activity Log previously showed nothing between "submitted" and either
+   * a reply or a timeout — for hours. That is "no unexplained waiting" broken
+   * by precisely the case the rule exists for.
+   */
+  const working = Array.from({ length: 300 }, (_, i) =>
+    ({ composer: true, busy: true, turns: 2, lastText: `output ${i}` }));
+  working.push(...Array.from({ length: 8 }, () =>
+    ({ composer: true, busy: false, turns: 2, lastText: 'finished' })));
+
+  const events = [];
+  const f = fakePage([frame(), ...working]);
+  const t = new DomTransport({
+    page: f.page, now: f.now, wait: f.wait,
+    onEvent: (e) => events.push(e),
+    config: { silenceMs: 3600_000 },
+  });
+  await t.send({ prompt: 'x', surface: 'engineer', timeoutMs: 4 * 3600_000 });
+
+  const progress = events.filter((e) => e.type === 'response-progress');
+  assert.ok(progress.length >= 2, `expected periodic progress, got ${progress.length}`);
+  assert.ok(progress[0].elapsedMs > 0);
+  assert.equal(typeof progress[0].silentMs, 'number');
+  assert.equal(progress[0].surface, 'engineer');
+});

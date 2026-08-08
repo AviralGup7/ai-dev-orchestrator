@@ -77,6 +77,15 @@ export const SURFACE_PATTERNS = [
       /\/session[s]?\/([0-9a-zA-Z_-]+)/,
       /\/thread[s]?\/([0-9a-zA-Z_-]+)/,
       /\/project[s]?\/([0-9a-zA-Z_-]+)/,
+      /*
+       * CONFIRMED from a real session: an Arena workspace is
+       * https://arena.ai/agent/019fa9f8-3335-7012-bd43-3b12dde5fe92
+       *
+       * It was already matched, but only by the GENERIC fallback added after
+       * the four hard-coded patterns missed nine of ten plausible shapes. It
+       * is promoted to a known pattern now that it is observed rather than
+       * guessed -- the fallback should be the safety net, not the mechanism.
+       */
       /\/agent[s]?\/([0-9a-zA-Z_-]+)/,
       /\/c\/([0-9a-zA-Z_-]+)/,
       /\/a\/([0-9a-zA-Z_-]+)/,
