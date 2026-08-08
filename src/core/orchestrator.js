@@ -748,6 +748,17 @@ export class Orchestrator {
   }
 
   async stop() {
+    /*
+     * Stop must work before a run has ever started.
+     *
+     * The UI offers Stop whenever a project exists, and a user can press it
+     * before pressing Start -- or after a reload, before the engine has
+     * loaded. `this.memory` is null then, and the unguarded version threw
+     * "Cannot set properties of null", which the panel showed as a crash
+     * instead of honouring the stop. Found by an integration test, not by
+     * reading.
+     */
+    if (!this.memory) await this.load();
     this.memory.status = 'stopped';
     this.memory.stopReason = 'user-stopped';
     await this.save();

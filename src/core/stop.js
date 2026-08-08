@@ -41,6 +41,30 @@ export const DEFAULTS = {
    * checked.
    */
   mandatory: ['testing'],
+
+  /*
+   * How many of the nine dimensions must rest on real evidence before the
+   * target can be declared reached.
+   *
+   * ADDED AFTER AN ADVERSARIAL TEST BROKE THE CENTRAL GUARANTEE.
+   *
+   * The old rule only required the MANDATORY dimensions to be evidenced. A
+   * manager returning 95% `asserted` on all nine still cleared the bar,
+   * because `testing` was computed honestly from real evidence and the other
+   * eight -- pure opinion -- carried the average over 90. The run stopped as
+   * `target-reached` on a scorecard that was one measured number and eight
+   * guesses.
+   *
+   * That is precisely the failure docs/SPEC.md claims to prevent, and it
+   * survived until an integration test made the manager flatter deliberately.
+   *
+   * Four is the defensible floor: from terminal output one can realistically
+   * measure testing, and infer completion, quality and documentation from
+   * diffs, lint and file changes. Architecture, UI/UX and accessibility
+   * genuinely cannot be measured this way -- the spec says so -- and demanding
+   * them would make completion unreachable rather than honest.
+   */
+  minEvidencedDimensions: 4,
 };
 
 /**
@@ -90,8 +114,45 @@ export function shouldStop(memory, config = {}) {
        * next objective becomes "produce the missing evidence", which is
        * genuinely the most valuable thing left to do.
        */
-      const weak = unmeasured(latest.scores || []);
+      const scores = latest.scores || [];
+      const weak = unmeasured(scores);
       const blocking = cfg.mandatory.filter((d) => weak.includes(d));
+
+      /*
+       * ASSERTED SCORES MAY NOT CARRY A RUN OVER THE LINE.
+       *
+       * Two independent checks, because either alone is insufficient:
+       *
+       *   1. ENOUGH dimensions must be evidenced. Otherwise one honest number
+       *      plus eight opinions clears the bar.
+       *   2. The evidenced dimensions must reach the target BY THEMSELVES.
+       *      Otherwise a 40% measured reality is lifted over 90% by confident
+       *      guesses elsewhere -- which is the same failure arriving by
+       *      arithmetic instead of by count.
+       *
+       * Opinions can decline to help. They cannot promote.
+       */
+      const evidenced = scores.filter((x) => x.confidence !== 'asserted');
+      if (evidenced.length < cfg.minEvidencedDimensions) {
+        return {
+          stop: false,
+          reason: null,
+          why: `${o.score}% reached, but only ${evidenced.length} of ${scores.length} dimensions rest on evidence ` +
+            `(at least ${cfg.minEvidencedDimensions} must). The next objective should produce that evidence.`,
+        };
+      }
+
+      const evidencedScore = Math.round(
+        evidenced.reduce((sum, x) => sum + x.score, 0) / evidenced.length,
+      );
+      if (evidencedScore < cfg.target) {
+        return {
+          stop: false,
+          reason: null,
+          why: `${o.score}% overall, but only ${evidencedScore}% across the dimensions backed by evidence ` +
+            '— the rest is opinion and cannot carry the run over the target',
+        };
+      }
 
       if (blocking.length > 0) {
         return {

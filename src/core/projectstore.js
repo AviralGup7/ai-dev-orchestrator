@@ -275,6 +275,26 @@ export class ProjectStore {
     const it = makeIteration({ runId: this.run.id, projectId: this.project.id, n });
     this.iterations.push(it);
     this.run.iterationIds = [...new Set([...(this.run.iterationIds || []), it.id])];
+
+    /*
+     * ADVANCE THE RUN'S CURSOR HERE, not at the caller.
+     *
+     * `currentIteration` is what `phaseComplete` and `nextPhase` key off, and
+     * what the runner uses to find the record it is writing. Leaving it to the
+     * caller meant beginIteration(1) created a record the runner could not
+     * then find -- every write went to null and the first execute phase threw
+     * "Cannot set properties of null". Found by running the end-to-end
+     * simulation, not by reading: the unit tests exercised beginIteration and
+     * the cursor separately, and each was correct alone.
+     *
+     * Moving to a new iteration also clears the completed-phase set, which is
+     * exactly the semantics markPhaseComplete already implements.
+     */
+    if (this.run.currentIteration !== n) {
+      this.run.currentIteration = n;
+      this.run.completedPhases = [];
+    }
+
     await this.saveIteration(it);
     await this.saveRun();
     return it;
