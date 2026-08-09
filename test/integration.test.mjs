@@ -375,3 +375,74 @@ test('a run works with no reviewer configured', async () => {
   assert.equal(verdict.reason, 'budget-exhausted');
   assert.equal(store.iterations.length, 3);
 });
+
+/* ---------------------------------------------------------------------------
+ * A MALFORMED REPLY MUST SHIP A SAMPLE OF ITSELF.
+ *
+ * This event recorded `chars: 60433` and `chars: 104042` in two real runs and
+ * not one character of the reply. Both times the parser was at fault, and both
+ * diagnoses had to be reasoned out from the character count alone — with the
+ * text sitting right there, being discarded.
+ * ------------------------------------------------------------------------ */
+
+test('A MALFORMED REPLY IS LOGGED WITH THE TEXT THAT FAILED TO PARSE', async () => {
+  const { EngineerAdapter } = await import('../src/adapters/engineer.js');
+  const events = [];
+  const body = 'I did the work.\n' + 'x'.repeat(5000) + '\nTHE VERY END';
+  const adapter = new EngineerAdapter({
+    transport: { async send() { return { text: body }; } },
+    onEvent: (e) => events.push(e),
+    policy: { backoffMs: 1, schemaRetries: 0 },
+  });
+
+  await adapter.execute({ objective: { text: 'do a thing' }, scope: 's', iteration: 1 }).catch(() => {});
+  const bad = events.find((e) => e.type === 'response-malformed');
+
+  assert.ok(bad, 'the malformed reply must be reported at all');
+  assert.ok(bad.head?.length, 'the HEAD must be present — a fence problem shows up at the top');
+  assert.ok(bad.tail?.length, 'the TAIL must be present — truncation shows up at the bottom');
+  assert.match(bad.head, /I did the work/);
+  assert.match(bad.tail, /THE VERY END/);
+  assert.equal(bad.fenceSeen, false,
+    'whether the model emitted the marker at all is the question the old message conflated');
+  assert.equal(bad.chars, body.length);
+});
+
+test('the sample is BOUNDED so a 100k reply cannot overrun the log', async () => {
+  const { EngineerAdapter } = await import('../src/adapters/engineer.js');
+  const events = [];
+  const huge = 'y'.repeat(104_042);   // the size of a real reply
+  const adapter = new EngineerAdapter({
+    transport: { async send() { return { text: huge }; } },
+    onEvent: (e) => events.push(e),
+    policy: { backoffMs: 1, schemaRetries: 0 },
+  });
+
+  await adapter.execute({ objective: { text: 'x' }, scope: 's', iteration: 1 }).catch(() => {});
+  const bad = events.find((e) => e.type === 'response-malformed');
+
+  assert.ok(bad.head.length <= 2000, `head must be capped, got ${bad.head.length}`);
+  assert.ok(bad.tail.length <= 2000, `tail must be capped, got ${bad.tail.length}`);
+  assert.equal(bad.chars, 104_042, 'the TRUE size must still be reported exactly');
+});
+
+test('the logged sample is REDACTED like every other captured text', async () => {
+  /*
+   * This ships raw model output into a durable log that users are asked to
+   * send to someone else. A reply that echoes a token must not leak it.
+   */
+  const { EngineerAdapter } = await import('../src/adapters/engineer.js');
+  const events = [];
+  const leaky = 'I used the token ghp_' + 'A'.repeat(36) + ' to push the branch.';
+  const adapter = new EngineerAdapter({
+    transport: { async send() { return { text: leaky }; } },
+    onEvent: (e) => events.push(e),
+    policy: { backoffMs: 1, schemaRetries: 0 },
+  });
+
+  await adapter.execute({ objective: { text: 'x' }, scope: 's', iteration: 1 }).catch(() => {});
+  const bad = events.find((e) => e.type === 'response-malformed');
+
+  assert.ok(!bad.head.includes('ghp_' + 'A'.repeat(36)),
+    'a credential echoed by the model must not reach the exported log');
+});

@@ -211,10 +211,37 @@ export class DomTransport {
     const baseText = before.lastText;
 
     /* -- 2. paste and submit -------------------------------------------- */
-    this.emit('prompt-pasted', { surface, chars: prompt.length });
-    await this.page.type(surface, prompt);
-    this.emit('prompt-submitted', { surface });
-    await this.page.click(surface, 'send');
+    /*
+     * EMITTED AFTER THE CALL, CARRYING WHAT THE CALL RETURNED.
+     *
+     * These fired BEFORE their operations, so they announced an intention and
+     * were read as an outcome. Run 202608090550 logged "Pasted 2029 characters"
+     * and "Submitted the prompt" nine milliseconds apart, and neither had
+     * happened: ProseMirror had rejected the write and nothing was sent. The
+     * log looked healthy for three minutes while the page sat untouched.
+     *
+     * `pageType` and `pageClick` already compute the diagnostics -- which
+     * insertion route worked, whether the framework enabled the send control,
+     * whether the submit was a click or the Enter fallback. None of it reached
+     * the log. Recording it costs nothing and is the difference between
+     * "submit failed" and "the click was rejected as untrusted, then Enter
+     * cleared the composer".
+     */
+    const typed = await this.page.type(surface, prompt);
+    this.emit('prompt-pasted', {
+      surface,
+      chars: prompt.length,
+      via: typed?.via ?? null,
+      readBack: typed?.readBack ?? null,
+      enabledSend: typed?.enabledSend ?? null,
+    });
+
+    const clicked = await this.page.click(surface, 'send');
+    this.emit('prompt-submitted', {
+      surface,
+      via: clicked?.via ?? null,
+      why: clicked?.why ?? null,
+    });
 
     /* -- 3. wait for a new turn to appear ------------------------------- */
     /*

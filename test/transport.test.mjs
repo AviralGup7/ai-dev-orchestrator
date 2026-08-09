@@ -881,3 +881,62 @@ test('an unreadable composer does not become a false submit failure', async () =
     assert.equal(r.ok, true, 'no composer to read is not evidence of failure');
   });
 });
+
+/* ---------------------------------------------------------------------------
+ * THE LOG MUST RECORD OUTCOMES, NOT INTENTIONS.
+ *
+ * `prompt-pasted` and `prompt-submitted` fired BEFORE the operations they
+ * describe, so they announced an intention and were read as an outcome. Run
+ * 202608090550 logged both nine milliseconds apart and neither had happened.
+ * ------------------------------------------------------------------------ */
+
+test('THE PASTE EVENT CARRIES THE ROUTE AND THE FRAMEWORK VERDICT', async () => {
+  const events = [];
+  const f = fakePage([frame(), frame({ busy: true, turns: 2, lastText: 'x' }),
+    ...Array.from({ length: 8 }, () => frame({ busy: false, turns: 2, lastText: 'done' }))]);
+  // A page whose type() reports HOW it got the text in, as the real one does.
+  f.page.type = async () => ({ ok: true, chars: 10, readBack: 10, enabledSend: false, via: 'dom' });
+
+  const t = new DomTransport({ page: f.page, now: f.now, wait: f.wait, onEvent: (e) => events.push(e) });
+  await t.send({ prompt: 'x', surface: 'manager', timeoutMs: 240_000 });
+
+  const pasted = events.find((e) => e.type === 'prompt-pasted');
+  assert.equal(pasted.via, 'dom', 'which insertion route worked is the first question asked');
+  assert.equal(pasted.enabledSend, false,
+    'the framework refusing to enable send is the signature of a rejected paste');
+  assert.equal(pasted.readBack, 10);
+});
+
+test('the submit event records HOW the message went, or why it did not', async () => {
+  const events = [];
+  const f = fakePage([frame(), frame({ busy: true, turns: 2, lastText: 'x' }),
+    ...Array.from({ length: 8 }, () => frame({ busy: false, turns: 2, lastText: 'done' }))]);
+  f.page.click = async () => ({ ok: true, via: 'click+enter', why: 'the click was ignored' });
+
+  const t = new DomTransport({ page: f.page, now: f.now, wait: f.wait, onEvent: (e) => events.push(e) });
+  await t.send({ prompt: 'x', surface: 'manager', timeoutMs: 240_000 });
+
+  const sub = events.find((e) => e.type === 'prompt-submitted');
+  assert.equal(sub.via, 'click+enter',
+    '"submitted" without a route cannot distinguish a working click from a silent no-op');
+  assert.match(sub.why, /ignored/);
+});
+
+test('THE PASTE EVENT IS NOT EMITTED BEFORE THE PASTE IS ATTEMPTED', async () => {
+  /*
+   * The ordering bug itself. If the event precedes the call, a throwing
+   * page still produces a cheerful "Pasted 2029 characters" in the log.
+   */
+  const order = [];
+  const f = fakePage([frame()]);
+  f.page.type = async () => { order.push('type'); throw new Error('composer rejected it'); };
+
+  const t = new DomTransport({
+    page: f.page, now: f.now, wait: f.wait,
+    onEvent: (e) => { if (e.type === 'prompt-pasted') order.push('event'); },
+  });
+  await t.send({ prompt: 'x', surface: 'manager', timeoutMs: 10_000 }).catch(() => {});
+
+  assert.deepEqual(order, ['type'],
+    'a paste that threw must not have already announced success');
+});

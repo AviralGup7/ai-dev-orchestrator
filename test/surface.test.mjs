@@ -495,3 +495,72 @@ test('classification survives missing and malformed input', () => {
     assert.equal(v.kind, null, `${JSON.stringify(input)} must not throw or produce a verdict`);
   }
 });
+
+/* ---------------------------------------------------------------------------
+ * THE LOG IS THE ONLY CHANNEL BACK FROM A REAL RUN.
+ *
+ * Whoever debugs an exported log cannot inspect the machine, re-run the
+ * failure, or ask a question. Anything dropped on the way into the log is
+ * simply unavailable — and dropping data is invisible, which is why it lasts.
+ *
+ * `selectorCheck` is computed inside the page by scanPage and was silently
+ * discarded by boundCapture, which builds a new object rather than spreading
+ * raw. It read `null` in all three surface scans across eight exported logs,
+ * and each of those sessions was spent inferring from a node dump what this
+ * field states outright.
+ * ------------------------------------------------------------------------ */
+
+const selCheck = {
+  composer: [{ sel: '#prompt-textarea', found: true }],
+  send: [{ sel: 'button[data-testid="send-button"]', found: false }],
+  stop: [{ sel: 'button[data-testid="stop-button"]', found: false }],
+  turns: [{ sel: '[data-message-author-role="assistant"]', count: 0 }],
+};
+
+test('SELECTOR CHECK SURVIVES INTO THE LOGGED CAPTURE', () => {
+  const { capture } = boundCapture(rawCapture({ selectorCheck: selCheck }), {});
+  assert.ok(capture.selectorCheck, 'it was null in every real log — the field must survive');
+  assert.equal(capture.selectorCheck.composer[0].found, true);
+  assert.equal(capture.selectorCheck.send[0].found, false);
+  assert.equal(capture.selectorCheck.turns[0].count, 0);
+});
+
+test('the rendered scan states the selector verdict in words', () => {
+  /*
+   * The markdown is what gets pasted to whoever is debugging. "found: false"
+   * repeated four times is easy to skim past; a sentence naming the roles that
+   * matched nothing is not.
+   */
+  const { capture } = boundCapture(rawCapture({ selectorCheck: selCheck }), {});
+  const md = renderCapture(capture);
+
+  assert.match(md, /prompt-textarea/, 'the actual selector text must be present');
+  assert.match(md, /no match/, 'a miss must be visible, not implied');
+  assert.match(md, /send, stop, turns/, 'it must name exactly which roles matched nothing');
+  assert.match(md, /extension fault/,
+    'it must say whose bug this is — three sessions were spent blaming the model');
+});
+
+test('a scan with no selectorCheck still renders, and claims nothing', () => {
+  /*
+   * Older captures and failed injections have no selectorCheck. Absence must
+   * not become a fabricated all-clear.
+   */
+  const { capture } = boundCapture(rawCapture({}), {});
+  assert.equal(capture.selectorCheck, null);
+  const md = renderCapture(capture);
+  assert.doesNotMatch(md, /Shipped selectors/, 'no data means no section, not an empty verdict');
+});
+
+test('a fully matching selector set is NOT reported as a fault', () => {
+  const good = {
+    composer: [{ sel: '#prompt-textarea', found: true }],
+    send: [{ sel: 'button#send', found: true }],
+    stop: [{ sel: 'button#stop', found: true }],
+    turns: [{ sel: '.assistant', count: 12 }],
+  };
+  const { capture } = boundCapture(rawCapture({ selectorCheck: good }), {});
+  const md = renderCapture(capture);
+  assert.doesNotMatch(md, /extension fault/, 'a healthy page must not be reported as broken');
+  assert.match(md, /12 node\(s\)/);
+});

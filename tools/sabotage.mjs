@@ -1205,6 +1205,57 @@ const CASES = [
     test: 'test/transport.test.mjs',
   },
   {
+    /* The log is the only channel back from a real run. selectorCheck was
+       computed in the page and dropped by boundCapture -- null in all three
+       scans across eight exported logs. */
+    name: 'selectorCheck is dropped on the way into the log again',
+    file: 'src/core/surface.js',
+    from: '    selectorCheck: raw.selectorCheck ?? null,',
+    to: '    selectorCheck: null,',
+    expect: 'SELECTOR CHECK SURVIVES INTO THE LOGGED CAPTURE',
+    test: 'test/surface.test.mjs',
+  },
+  {
+    name: 'the scan shows selectors but never states the verdict',
+    file: 'src/core/surface.js',
+    from: '    if (broken.length) {',
+    to: '    if (false) {',
+    expect: 'the rendered scan states the selector verdict in words',
+    test: 'test/surface.test.mjs',
+  },
+  {
+    name: 'a malformed reply is logged without a sample of itself',
+    file: 'src/adapters/engineer.js',
+    from: '        head: sample(text, 2000),',
+    to: '        head: undefined,',
+    expect: 'A MALFORMED REPLY IS LOGGED WITH THE TEXT',
+    test: 'test/integration.test.mjs',
+  },
+  {
+    name: 'the malformed sample is unbounded and can overrun the log',
+    file: 'src/adapters/engineer.js',
+    from: '      const sample = (t, n) => redact(String(t).slice(0, n));',
+    to: '      const sample = (t) => redact(String(t));',
+    expect: 'the sample is BOUNDED',
+    test: 'test/integration.test.mjs',
+  },
+  {
+    name: 'the malformed sample stops being redacted',
+    file: 'src/adapters/engineer.js',
+    from: '      const sample = (t, n) => redact(String(t).slice(0, n));',
+    to: '      const sample = (t, n) => String(t).slice(0, n);',
+    expect: 'the logged sample is REDACTED',
+    test: 'test/integration.test.mjs',
+  },
+  {
+    name: 'the submit event stops recording which route worked',
+    file: 'src/transports/dom.js',
+    from: '      via: clicked?.via ?? null,',
+    to: '      via: null,',
+    expect: 'the submit event records HOW the message went',
+    test: 'test/transport.test.mjs',
+  },
+  {
     name: 'the scanner stops ranking and takes document order',
     file: 'extension/scan.js',
     from: '  candidates.sort((a, b) => b.rank - a.rank);',

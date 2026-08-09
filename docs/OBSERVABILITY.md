@@ -249,3 +249,70 @@ Both are asserted by tests and both sabotages are caught.
   `icon128.png` for notifications only; add before loading unpacked.
 * **Replay is possible but not built.** The log has ordered ids and typed
   events, which is the hard part; a replay driver is not written.
+
+---
+
+## What an exported log must contain (2026-08-09)
+
+**The exported log is the only channel back from a real run.** Whoever reads it
+cannot inspect the machine, re-run the failure, or ask a question. Anything
+dropped on the way in is unavailable — and dropping data is invisible, which is
+why it survives.
+
+Audited across eight real exports. Four things were missing, each of which had
+cost at least one session of guessing.
+
+### 1. `selectorCheck` — computed, then discarded
+
+`scanPage` builds it inside the page: which shipped selector matched, and how
+many nodes each `turns` selector found. `boundCapture` constructs a new object
+rather than spreading `raw`, so it never survived. **`null` in all three
+surface scans across all eight logs.**
+
+Now preserved and rendered as a table with an explicit verdict:
+
+```
+| send | `button[data-testid="send-button"]` | **no match** |
+
+> **No selector matched for: send, stop, turns.** That is an extension fault,
+> not a fault of the page or the model — these selector lists need updating.
+```
+
+Three sessions were spent inferring this from a node dump.
+
+### 2. An export manifest
+
+Emitted at download time so it heads the file even after a worker eviction:
+extension version, Chrome major version (114 and 110 change real behaviour),
+platform, **the exact selector set that shipped**, the run config, run state,
+and the heartbeat. Bound hosts only — never conversation ids.
+
+### 3. A sample of a reply that failed to parse
+
+`response-malformed` recorded `chars: 60433` and `chars: 104042` in two real
+runs and not one character of the text. Both times the parser was at fault and
+both diagnoses were reasoned out from a number.
+
+Now carries `head` and `tail` (2,000 characters each, redacted), plus
+`fenceSeen` and `backticksSeen` — the one-bit answer to "did the model ignore
+the protocol, or did we fail to read it?", which the old message conflated.
+
+Head and tail rather than the middle: a report is bounded by its fence at the
+top and its closing brace at the bottom, and truncation shows as a tail that
+stops mid-token.
+
+### 4. Outcomes, not intentions
+
+`prompt-pasted` and `prompt-submitted` fired **before** the operations they
+described. Run `202608090550` logged both nine milliseconds apart and neither
+had happened. They now fire after, carrying what the call returned: `via`
+(`execCommand` / `dom` / `click` / `enter` / `click+enter`), `readBack`, and
+`enabledSend` — whether the page's own framework enabled the send control.
+
+### The rule
+
+> An event that reports an action rather than its outcome is worse than no
+> event, because it reads as confirmation.
+
+Anything computed for a decision should be recorded with it. The cost is bytes;
+the cost of the alternative is a session.

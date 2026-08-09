@@ -25,6 +25,8 @@ import { Adapter, AdapterError } from './base.js';
 import { composeFirstPrompt, composeIterationPrompt } from '../core/protocol.js';
 import { parseReport, reportToEvidence, crossCheck } from '../core/report.js';
 import { parseAll } from '../core/parse.js';
+import { redact } from '../core/journal.js';
+import { REPORT_FENCE } from '../core/protocol.js';
 
 /** A one-line rendering of what a record actually observed. */
 function describeRecord(e) {
@@ -72,10 +74,35 @@ export class EngineerAdapter extends Adapter {
     const iterationCtx = { source: 'arena', sourceType: 'terminal', iteration: ctx.iteration, phase: 'execute' };
 
     if (!parsed.ok || !parsed.report) {
+      /*
+       * SHIP A SAMPLE OF THE TEXT THAT FAILED TO PARSE.
+       *
+       * This event recorded `chars: 60433` and `chars: 104042` in two real
+       * runs and not one character of the actual reply. Both times the parser
+       * was wrong -- it required literal backticks that a RENDERED page does
+       * not contain -- and both times diagnosing it meant reasoning about what
+       * the text probably looked like, with the text itself sitting right
+       * there and being dropped.
+       *
+       * The head and tail, not the middle: a report is bounded by its fence at
+       * the top and its closing brace at the bottom, and truncation shows up
+       * as a tail that stops mid-token. Bounded at 2000 characters each so a
+       * 100k reply cannot overrun the log's size limits, and redacted on the
+       * way out like every other captured page text.
+       *
+       * `fenceSeen` is the one-bit answer to "did the model emit the marker at
+       * all, or ignore the protocol?" -- the two failures the old message
+       * conflated into one sentence.
+       */
+      const sample = (t, n) => redact(String(t).slice(0, n));
       this.emit('response-malformed', {
         iteration: ctx.iteration,
         problems: parsed.problems,
         chars: text.length,
+        fenceSeen: text.includes(REPORT_FENCE),
+        backticksSeen: text.includes('```'),
+        head: sample(text, 2000),
+        tail: redact(String(text).slice(-2000)),
       });
 
       /*

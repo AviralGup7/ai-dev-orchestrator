@@ -44,7 +44,7 @@ import { initialScope, validateSetup } from '../src/core/modes.js';
 import { emptyMemory } from '../src/core/types.js';
 import { snapshotEnvironment, EXPECTED_HOSTS } from './probe.js';
 import { createPageReader } from './dom-page.js';
-import { DomTransport } from '../src/transports/dom.js';
+import { DomTransport, SELECTORS } from '../src/transports/dom.js';
 import { ManagerAdapter } from '../src/adapters/manager.js';
 import { EngineerAdapter } from '../src/adapters/engineer.js';
 import { ReviewerAdapter } from '../src/adapters/reviewer.js';
@@ -497,8 +497,16 @@ const mapAdapterEvent = (t) => ADAPTER_EVENTS[t] ?? 'user-action';
 
 function describeTransport(e) {
   switch (e.type) {
-    case 'prompt-pasted': return `Pasted ${e.chars} characters into the ${e.surface} composer`;
-    case 'prompt-submitted': return `Submitted the prompt to ${e.surface}`;
+    case 'prompt-pasted': {
+      /* The route and the framework's verdict, not just the byte count -- a
+         count alone read as success while nothing had been typed. */
+      const bits = [`Pasted ${e.chars} characters into the ${e.surface} composer`];
+      if (e.via) bits.push(`via ${e.via}`);
+      if (e.enabledSend === false) bits.push('send control NOT enabled by the page');
+      return bits.join(' — ');
+    }
+    case 'prompt-submitted':
+      return `Submitted the prompt to ${e.surface}${e.via ? ` via ${e.via}` : ''}${e.why ? ` (${e.why})` : ''}`;
     case 'response-started': return `${e.surface} began responding`;
     case 'response-progress': {
       const mins = Math.round(e.elapsedMs / 60_000);
@@ -727,6 +735,62 @@ const COMMANDS = {
    * file and does not touch a tab.
    */
   async 'download-log'() {
+    /*
+     * A MANIFEST AT THE HEAD OF EVERY EXPORT.
+     *
+     * The exported log is the ONLY channel back from a real run: whoever
+     * debugs it cannot inspect the machine, re-run the failure, or ask a
+     * question. Every previous export forced the reader to infer the
+     * extension version, the Chrome build, which selectors shipped and what
+     * the run was configured to do -- and in several sessions those guesses
+     * were the slow part.
+     *
+     * Emitted at download time rather than at startup so it always leads the
+     * file, even for a session whose worker was evicted and revived.
+     *
+     * Everything here is already visible in the manifest or the source. The
+     * bound conversation ids are the exception, and they are redacted below.
+     */
+    try {
+      const m = chrome.runtime.getManifest?.() ?? {};
+      logger.log('config-loaded', {
+        source: 'system',
+        description: `Export manifest — v${m.version ?? '?'} on ${navigator?.userAgent ? 'Chrome' : 'unknown'}`,
+        data: {
+          kind: 'export-manifest',
+          extension: { version: m.version ?? null, minimumChrome: m.minimum_chrome_version ?? null },
+          userAgent: String(navigator?.userAgent ?? '').slice(0, 300),
+          /*
+           * Chrome's major version decides real behaviour: 114 for sidePanel
+           * and the 10MB storage quota, 110 for API calls resetting the idle
+           * timer. "It works on my machine" usually means a different number
+           * here.
+           */
+          chromeMajor: Number(String(navigator?.userAgent ?? '').match(/Chrom(?:e|ium)\/(\d+)/)?.[1]) || null,
+          platform: String(navigator?.platform ?? '').slice(0, 60),
+          /* Selectors are the most-changed thing in this project; shipping the
+             exact set with the log removes a whole round trip. */
+          selectors: SELECTORS,
+          config,
+          run: projectStore.run
+            ? { id: projectStore.run.id, state: projectStore.run.state, iteration: projectStore.run.currentIteration }
+            : null,
+          /* Which surfaces were bound, WITHOUT the conversation ids. */
+          binding: Object.fromEntries(Object.entries(binding?.surfaces ?? {}).map(([k, v]) => [
+            k, { host: (() => { try { return new URL(v.url).host; } catch { return null; } })(), hasConversation: Boolean(v.conversationId) },
+          ])),
+          heartbeatAt: heartbeatSeenAt,
+          running,
+        },
+      });
+    } catch (err) {
+      /* A manifest that throws must never block the export it heads. */
+      logger.log('config-loaded', {
+        source: 'system', status: 'warning',
+        description: `Could not assemble the export manifest: ${reason(err)}`,
+      });
+    }
+
     await logger.flush();
     const all = await sink.all();
     const url = 'data:application/x-ndjson;charset=utf-8,' + encodeURIComponent(toNdjson(all));

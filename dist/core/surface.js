@@ -206,6 +206,24 @@ export function boundCapture(raw, config = {}) {
     scroll: raw.scroll,
     viewport: raw.viewport,
     counts: raw.counts,
+    /*
+     * THE SINGLE MOST USEFUL FIELD, AND IT WAS BEING THROWN AWAY.
+     *
+     * `scanPage` computes `selectorCheck` inside the page -- which shipped
+     * selector matched, and how many nodes each `turns` selector found. It is
+     * the direct answer to "is the selector I ship actually matching anything",
+     * which is the question every remote debugging session has opened with.
+     *
+     * This function builds a NEW object rather than spreading `raw`, so the
+     * field was silently dropped on the way out. Across eight exported logs and
+     * three surface scans it was `null` every single time, and each of those
+     * sessions was spent inferring from a node dump what this field states
+     * outright. Dropping data is invisible; that is what made it survive.
+     *
+     * Rebuilt rather than spread, deliberately: an unbounded copy of page data
+     * into a durable log is how the size limits get defeated.
+     */
+    selectorCheck: raw.selectorCheck ?? null,
     signals: (raw.signals || []).slice(0, 40).map(clipText),
     nodes,
     truncated: {
@@ -270,6 +288,42 @@ export function renderCapture(c) {
     L.push('**Page is saying:**');
     for (const s of c.signals) L.push(`- ${s}`);
     L.push('');
+  }
+
+  /*
+   * SELECTOR CHECK BEFORE THE NODE DUMP.
+   *
+   * A reader debugging a stuck run wants "did my selectors match" before they
+   * want a table of 400 elements. Rendered as a table with an explicit verdict
+   * per selector, and the miss case called out in words, because "found:
+   * false" repeated four times is easy to skim past.
+   */
+  if (c.selectorCheck) {
+    const sc = c.selectorCheck;
+    L.push('**Shipped selectors, checked against this page:**');
+    L.push('');
+    L.push('| role | selector | result |');
+    L.push('|---|---|---|');
+    for (const role of ['composer', 'send', 'stop']) {
+      for (const r of sc[role] || []) {
+        L.push(`| ${role} | \`${r.sel}\` | ${r.found ? 'found' : '**no match**'} |`);
+      }
+      if (!(sc[role] || []).length) L.push(`| ${role} | _none configured_ | — |`);
+    }
+    for (const r of sc.turns || []) {
+      L.push(`| turns | \`${r.sel}\` | ${r.count > 0 ? `${r.count} node(s)` : '**no match**'} |`);
+    }
+    L.push('');
+
+    const dead = (role) => (sc[role] || []).length && (sc[role] || []).every((r) => !r.found);
+    const noTurns = (sc.turns || []).length && (sc.turns || []).every((r) => !r.count);
+    const broken = ['composer', 'send', 'stop'].filter(dead);
+    if (noTurns) broken.push('turns');
+    if (broken.length) {
+      L.push(`> **No selector matched for: ${broken.join(', ')}.** That is an extension fault, `
+        + 'not a fault of the page or the model — these selector lists need updating.');
+      L.push('');
+    }
   }
 
   if (c.nodes?.length) {
