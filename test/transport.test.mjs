@@ -589,6 +589,8 @@ function stubEl({ editable = false, text = '', accepts = true } = {}) {
     dispatchEvent() { return true; },
     click() { el.clicked = true; },
     clicked: false,
+    // A DOM write that ProseMirror ignores: the node lands, the model does not.
+    appendChild(child) { el.textContent = (el.textContent || '') + (child.textContent || ''); },
   };
   // A React-controlled composer that REJECTS the write reverts to empty.
   if (!accepts) {
@@ -599,17 +601,52 @@ function stubEl({ editable = false, text = '', accepts = true } = {}) {
   return el;
 }
 
-function withDoc(map, fn) {
+/**
+ * @param {object} map                 selector -> element
+ * @param {object} [opts]
+ * @param {boolean} [opts.execCommandWorks]  does execCommand('insertText') land?
+ *   This models the real distinction: ProseMirror accepts execCommand and
+ *   ignores a raw DOM write, so `false` reproduces ChatGPT with a stale
+ *   implementation and `true` reproduces the fix working.
+ */
+function withDoc(map, fn, { execCommandWorks = false } = {}) {
   const g = globalThis;
-  const saved = { d: g.document, k: g.KeyboardEvent, i: g.InputEvent, e: g.Event, cs: g.getComputedStyle };
-  g.document = { querySelector: (s) => map[s] ?? null, body: { innerText: '' } };
+  const saved = {
+    d: g.document, k: g.KeyboardEvent, i: g.InputEvent, e: g.Event,
+    cs: g.getComputedStyle, w: g.window,
+  };
+  const calls = { execCommand: 0 };
+  g.document = {
+    querySelector: (s) => map[s] ?? null,
+    body: { innerText: '' },
+    createElement: () => ({ textContent: '' }),
+    createRange: () => ({ selectNodeContents(el) { calls.selected = el; } }),
+    execCommand: (cmd, _ui, value) => {
+      if (cmd !== 'insertText') return false;
+      calls.execCommand++;
+      if (!execCommandWorks) return false;
+      /*
+       * Faithful to the real behaviour: insertText replaces the SELECTION.
+       * With nothing selected it inserts at the caret, i.e. APPENDS — which is
+       * how a retry sends the prompt twice. The stub must model that or the
+       * "replaces rather than appends" test proves nothing.
+       */
+      const target = Object.values(map).find((el) => el && el.isContentEditable);
+      if (target) {
+        target.textContent = calls.selected === target ? value : (target.textContent || '') + value;
+        target.accepted = true;
+      }
+      return true;
+    },
+  };
+  g.window = { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) };
   g.KeyboardEvent = class { constructor(t, o) { Object.assign(this, { type: t }, o); } };
   g.InputEvent = class { constructor(t, o) { Object.assign(this, { type: t }, o); } };
   g.Event = class { constructor(t, o) { Object.assign(this, { type: t }, o); } };
   g.getComputedStyle = () => ({ display: 'block', visibility: 'visible' });
-  return Promise.resolve(fn()).finally(() => {
+  return Promise.resolve(fn(calls)).finally(() => {
     g.document = saved.d; g.KeyboardEvent = saved.k; g.InputEvent = saved.i;
-    g.Event = saved.e; g.getComputedStyle = saved.cs;
+    g.Event = saved.e; g.getComputedStyle = saved.cs; g.window = saved.w;
   });
 }
 
@@ -648,7 +685,12 @@ test('A SEND BUTTON THAT IS NOT MOUNTED YET FALLS BACK TO ENTER', async () => {
   const { pageClick } = await import('../extension/dom-page.js');
   const composer = stubEl({ editable: true, text: 'the prompt' });
   const sent = [];
-  composer.dispatchEvent = (e) => { sent.push(e.key); return true; };
+  // A composer that ACCEPTS Enter clears itself, exactly as the real one does.
+  composer.dispatchEvent = (e) => {
+    sent.push(e.key);
+    if (e.key === 'Enter' && e.type === 'keydown') composer.textContent = '';
+    return true;
+  };
 
   await withDoc({ '#prompt-textarea': composer }, async () => {
     const r = await pageClick(
@@ -685,5 +727,157 @@ test('a missing STOP control does NOT fall back to Enter', async () => {
     const r = await pageClick({ composer: ['#prompt-textarea'], stop: ['button#stop'] }, 'stop');
     assert.equal(r.ok, false, 'a missing stop control is an honest failure');
     assert.ok(!seen.includes('Enter'), 'pressing Enter here would submit, not stop');
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * PROSEMIRROR (run 202608090550)
+ *
+ * ChatGPT's composer is a ProseMirror editor. It keeps an immutable document
+ * model SEPARATE from the visible DOM and updates it only through its own
+ * transaction system — driven by beforeinput/input with a real `inputType`, or
+ * by document.execCommand('insertText').
+ *
+ * Assigning `textContent` therefore makes text VISIBLE while the editor still
+ * believes it is empty. The send button never enables, Enter does nothing, and
+ * the run waits four minutes for a reply to a message still sitting in the box.
+ * The log shows it precisely: chars frozen at 26,506, busy:false, for 3m.
+ * ------------------------------------------------------------------------ */
+
+test('THE COMPOSER IS FILLED VIA execCommand, WHICH IS WHAT PROSEMIRROR LISTENS TO', async () => {
+  const { pageType } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true });
+
+  await withDoc({ '#prompt-textarea': composer }, (calls) => {
+    const r = pageType({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'evaluate this please');
+    assert.equal(calls.execCommand, 1,
+      'a raw DOM write does not reach ProseMirror; execCommand is the documented route');
+    assert.equal(r.via, 'execCommand');
+    assert.equal(composer.accepted, true, 'the editor model must have received it');
+  }, { execCommandWorks: true });
+});
+
+test('the DOM fallback fires a spec-shaped beforeinput, not a bare Event', async () => {
+  /*
+   * When execCommand is unavailable the fallback must still speak the language
+   * these editors listen for. A `new Event('input')` with no `inputType` is
+   * ignored by both ProseMirror and Lexical — that is the whole bug.
+   */
+  const { pageType } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true });
+  const events = [];
+  composer.dispatchEvent = (e) => { events.push(e); return true; };
+
+  await withDoc({ '#prompt-textarea': composer }, () => {
+    pageType({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'hello there friend');
+  }, { execCommandWorks: false });
+
+  assert.deepEqual(events.map((e) => e.type), ['beforeinput', 'input'],
+    'beforeinput must come first — it is the event the editor keys on');
+  for (const e of events) {
+    assert.equal(e.inputType, 'insertText', 'an event without inputType is discarded');
+    assert.equal(e.composed, true, 'must cross a shadow boundary if the editor is encapsulated');
+  }
+});
+
+test('the insert REPLACES existing content rather than appending', async () => {
+  /*
+   * Without selecting the existing content first, a retry appends and the
+   * prompt is sent twice over.
+   */
+  const { pageType } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, text: 'a previous draft' });
+
+  await withDoc({ '#prompt-textarea': composer }, () => {
+    pageType({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'the new prompt');
+    assert.equal(composer.textContent, 'the new prompt',
+      'the old draft must be gone, not prefixed');
+  }, { execCommandWorks: true });
+});
+
+test('the paste reports whether the FRAMEWORK enabled the send control', async () => {
+  /*
+   * Reading back textContent is near-tautological on the DOM path: it reads
+   * the property we just wrote. It passed for the whole of run 202608090550
+   * while the message was never sent. An enabled send button is independent
+   * evidence, because the editor enables it as a consequence of its own model
+   * becoming non-empty.
+   */
+  const { pageType } = await import('../extension/dom-page.js');
+
+  const withButton = stubEl({ editable: true });
+  await withDoc({ '#prompt-textarea': withButton, 'button#send': stubEl() }, () => {
+    const r = pageType({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'x'.repeat(64));
+    assert.equal(r.enabledSend, true, 'a mounted, enabled send control is the good case');
+  }, { execCommandWorks: true });
+
+  const noButton = stubEl({ editable: true });
+  await withDoc({ '#prompt-textarea': noButton }, () => {
+    const r = pageType({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'x'.repeat(64));
+    assert.equal(r.enabledSend, false,
+      'no send control after a paste is the signature of a rejected input');
+  }, { execCommandWorks: true });
+});
+
+test('A CLICK THE PAGE IGNORES IS A FAILED SUBMIT, NOT A SUCCESS', async () => {
+  /*
+   * el.click() dispatches isTrusted:false and some handlers reject exactly
+   * that. Returning ok:true was the same mistake the paste used to make —
+   * reporting the action instead of the outcome. A composer still holding the
+   * prompt is the page saying it did not take it.
+   */
+  const { pageClick } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, text: 'still here' });
+  const button = stubEl();
+
+  await withDoc({ '#prompt-textarea': composer, 'button#send': button }, async () => {
+    const r = await pageClick({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'send');
+    assert.equal(button.clicked, true, 'it must genuinely try the button first');
+    assert.equal(r.ok, false, 'four minutes were spent waiting for a reply to an unsent message');
+    assert.match(r.why, /still holds the prompt/);
+    assert.match(r.why, /isTrusted/, 'the message should name the actual mechanism');
+  });
+});
+
+test('a click the page ACCEPTS reports success', async () => {
+  const { pageClick } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, text: 'the prompt' });
+  const button = stubEl();
+  button.click = () => { button.clicked = true; composer.textContent = ''; };
+
+  await withDoc({ '#prompt-textarea': composer, 'button#send': button }, async () => {
+    const r = await pageClick({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'send');
+    assert.equal(r.ok, true);
+    assert.equal(r.via, 'click');
+  });
+});
+
+test('an ignored click falls back to Enter before giving up', async () => {
+  const { pageClick } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true, text: 'the prompt' });
+  const button = stubEl();   // click does nothing at all
+  composer.dispatchEvent = (e) => {
+    if (e.key === 'Enter' && e.type === 'keydown') composer.textContent = '';
+    return true;
+  };
+
+  await withDoc({ '#prompt-textarea': composer, 'button#send': button }, async () => {
+    const r = await pageClick({ composer: ['#prompt-textarea'], send: ['button#send'] }, 'send');
+    assert.equal(r.ok, true, 'the keyboard route must be tried before failing the iteration');
+    assert.equal(r.via, 'click+enter');
+  });
+});
+
+test('an unreadable composer does not become a false submit failure', async () => {
+  /*
+   * The counterweight. Some surfaces clear differently or hide the composer
+   * after sending. Absence of evidence must not be reported as failure, or
+   * this breaks the sites that work today.
+   */
+  const { pageClick } = await import('../extension/dom-page.js');
+  const button = stubEl();
+  await withDoc({ 'button#send': button }, async () => {
+    const r = await pageClick({ composer: ['#nope'], send: ['button#send'] }, 'send');
+    assert.equal(r.ok, true, 'no composer to read is not evidence of failure');
   });
 });

@@ -28,15 +28,62 @@ export function pageType(selectors, text) {
   if (!el) return { ok: false, why: 'no composer' };
 
   el.focus();
+  let usedExecCommand = false;
 
   if (el.isContentEditable) {
     /*
-     * contenteditable composers (ChatGPT, DeepSeek) ignore `.value`. Replacing
-     * `textContent` and firing `input` is the least invasive thing that works;
-     * `execCommand` would be simpler and is deprecated and inconsistent.
+     * PROSEMIRROR KEEPS ITS OWN STATE TREE. WRITING THE DOM DOES NOT REACH IT.
+     *
+     * ChatGPT's composer is a ProseMirror editor. It maintains an immutable
+     * document model SEPARATE from the visible DOM and updates it only via its
+     * own transaction system, which is driven by `beforeinput`/`input` events
+     * carrying a real `inputType` -- or by `document.execCommand('insertText')`.
+     *
+     * Assigning `textContent` makes the text VISIBLE while ProseMirror still
+     * believes the editor is empty. The consequences are exactly what run
+     * 202608090550 shows: the send button is never enabled (so "no send
+     * control"), Enter is ignored (so the message is never sent), and the page
+     * sits at an unchanged character count until the budget expires.
+     *
+     * The previous comment here claimed execCommand was "deprecated and
+     * inconsistent". It IS formally deprecated -- and it is also the only API
+     * every one of these editors actually listens to. Correctness beats tidy.
+     *
+     * Order matters: select the existing content first so the insert REPLACES
+     * rather than appends. A retry would otherwise send the prompt twice over.
      */
-    el.textContent = text;
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+    let inserted = false;
+    try {
+      const sel = window.getSelection?.();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      inserted = document.execCommand('insertText', false, text);
+      usedExecCommand = inserted;
+    } catch {
+      inserted = false;
+    }
+
+    if (!inserted) {
+      /*
+       * Fallback: rebuild the DOM and fire a SPEC-SHAPED InputEvent.
+       *
+       * `beforeinput` first, because that is the event ProseMirror and Lexical
+       * key on; a bare `new Event('input')` with no `inputType` is ignored by
+       * both. `composed: true` so it crosses a shadow boundary if the editor
+       * is encapsulated.
+       */
+      el.textContent = '';
+      const p = document.createElement('p');
+      p.textContent = text;
+      el.appendChild(p);
+      for (const type of ['beforeinput', 'input']) {
+        el.dispatchEvent(new InputEvent(type, {
+          inputType: 'insertText', data: text, bubbles: true, cancelable: true, composed: true,
+        }));
+      }
+    }
   } else {
     const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement;
     const setter = Object.getOwnPropertyDescriptor(proto.prototype, 'value')?.set;
@@ -68,7 +115,44 @@ export function pageType(selectors, text) {
     };
   }
 
-  return { ok: true, chars: text.length, readBack: got.length };
+  /*
+   * READING BACK `textContent` PROVES ALMOST NOTHING ON ITS OWN.
+   *
+   * The check above reads the property we just wrote, so on the DOM-fallback
+   * path it is very nearly a tautology: it passed for the whole of run
+   * 202608090550 while ProseMirror's model stayed empty and the message was
+   * never sent. It only ever catches a composer that reverts the write.
+   *
+   * `enabledSend` asks the FRAMEWORK instead. These editors enable the send
+   * control as a direct consequence of their model becoming non-empty, so a
+   * send control that exists and is not disabled is independent evidence that
+   * the text reached the state tree -- the one thing we actually need to know.
+   *
+   * Reported rather than fatal: it is a signal, not a certainty. Some
+   * surfaces keep the control permanently enabled, and failing the paste on
+   * that basis would break the sites that work today. `pageClick` is where the
+   * decision gets made, and it now has this to work with.
+   */
+  let enabledSend = null;
+  try {
+    const send = pickFrom(selectors.send);
+    enabledSend = send
+      ? !(send.disabled || send.getAttribute?.('aria-disabled') === 'true')
+      : false;
+  } catch {
+    enabledSend = null;
+  }
+
+  return { ok: true, chars: text.length, readBack: got.length, enabledSend, via: usedExecCommand ? 'execCommand' : 'dom' };
+}
+
+/** Shared selector walk. Defined once so `pageType` and `pageClick` agree. */
+function pickFrom(list) {
+  for (const s of list || []) {
+    const el = document.querySelector(s);
+    if (el) return el;
+  }
+  return null;
 }
 
 /** Click send, preferring the button over a synthetic Enter. */
@@ -114,7 +198,15 @@ export async function pageClick(selectors, which) {
           bubbles: true, cancelable: true, composed: true,
         }));
       }
-      return { ok: true, via: 'enter', why: el ? 'the send button was disabled' : 'no send button was mounted' };
+      const sent = await composerEmptied(composer);
+      return sent
+        ? { ok: true, via: 'enter', why: el ? 'the send button was disabled' : 'no send button was mounted' }
+        : {
+          ok: false,
+          via: 'enter',
+          why: 'the prompt was typed but never sent — Enter did not submit and no usable send button appeared. '
+            + 'The composer still holds the text, which means the page framework never registered the input.',
+        };
     }
     return {
       ok: false,
@@ -123,7 +215,60 @@ export async function pageClick(selectors, which) {
   }
 
   el.click();
-  return { ok: true, via: 'click' };
+
+  if (which !== 'send') return { ok: true, via: 'click' };
+
+  /*
+   * VERIFY THE SUBMIT, DO NOT ASSUME IT.
+   *
+   * `el.click()` dispatches a MouseEvent with `isTrusted: false`, and some
+   * handlers short-circuit on exactly that. Returning `ok: true` here is the
+   * same class of mistake the paste used to make: reporting an action rather
+   * than an outcome. Run 202608090550 then waited four minutes for a reply to
+   * a message that was still sitting in the composer.
+   *
+   * A cleared composer is the page telling us it accepted the message.
+   */
+  if (await composerEmptied(composer)) return { ok: true, via: 'click' };
+
+  if (composer) {
+    composer.focus();
+    for (const type of ['keydown', 'keypress', 'keyup']) {
+      composer.dispatchEvent(new KeyboardEvent(type, {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+        bubbles: true, cancelable: true, composed: true,
+      }));
+    }
+    if (await composerEmptied(composer)) return { ok: true, via: 'click+enter' };
+  }
+
+  return {
+    ok: false,
+    via: 'click',
+    why: 'the send button was clicked but the composer still holds the prompt — the click was not accepted '
+      + '(a synthetic click carries isTrusted: false, which some handlers reject)',
+  };
+}
+
+/**
+ * Did the composer clear? Polled for ~2s.
+ *
+ * The one signal that means "the page took the message". Checked rather than
+ * assumed, because both submit routes can silently no-op: a synthetic click
+ * carries `isTrusted: false`, and Enter is ignored when the editor's model
+ * never received the text.
+ *
+ * A composer we cannot read returns `true` -- absence of evidence must not
+ * become a failure, or surfaces that clear differently would break.
+ */
+async function composerEmptied(composer) {
+  if (!composer) return true;
+  const read = () => (composer.isContentEditable ? composer.textContent : composer.value) || '';
+  for (let i = 0; i < 20; i++) {
+    if (read().trim().length === 0) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
 }
 
 /**
