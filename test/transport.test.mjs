@@ -940,3 +940,110 @@ test('THE PASTE EVENT IS NOT EMITTED BEFORE THE PASTE IS ATTEMPTED', async () =>
   assert.deepEqual(order, ['type'],
     'a paste that threw must not have already announced success');
 });
+
+/* ---------------------------------------------------------------------------
+ * "could not submit on engineer: undefined" (run 202608090835)
+ *
+ * Chrome does not implement InjectionResult.error (crbug 1271527; MDN states
+ * it outright). An injected function that throws — or, being async, rejects —
+ * comes back as `result: undefined`, with the real error written only to the
+ * TARGET PAGE's console where a background worker can never read it.
+ *
+ * `undefined?.why` is `undefined`, so the one fact that mattered was destroyed
+ * at the boundary and replaced with the literal word "undefined".
+ * ------------------------------------------------------------------------ */
+
+test('AN IN-PAGE THROW COMES BACK AS A REASON, NOT AS "undefined"', async () => {
+  const { pageType } = await import('../extension/dom-page.js');
+  const exploding = stubEl({ editable: true });
+  Object.defineProperty(exploding, 'isContentEditable', {
+    get() { throw new Error('the frame was detached mid-write'); },
+  });
+
+  await withDoc({ '#prompt-textarea': exploding }, () => {
+    const r = pageType({ composer: ['#prompt-textarea'], send: [] }, 'x');
+    assert.equal(r.__threw, true, 'the throw must be returned as data, not lost');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /detached mid-write/,
+      'the actual message is the whole point — "undefined" is what we had before');
+    assert.ok(r.stack, 'a stack helps and costs nothing');
+  });
+});
+
+test('pageClick reports an in-page throw rather than swallowing it', async () => {
+  const { pageClick } = await import('../extension/dom-page.js');
+  const g = globalThis;
+  const savedDoc = g.document;
+  g.document = { querySelector() { throw new Error('CSP blocked the query'); } };
+  try {
+    const r = await pageClick({ composer: ['#c'], send: ['#s'] }, 'send');
+    assert.equal(r.__threw, true);
+    assert.match(r.error, /CSP blocked/);
+  } finally {
+    g.document = savedDoc;
+  }
+});
+
+test('the injected functions still return plain results when nothing throws', async () => {
+  /*
+   * The counterweight: the try/catch wrapper must be invisible on the happy
+   * path, or every caller has to learn about `__threw`.
+   */
+  const { pageType } = await import('../extension/dom-page.js');
+  const composer = stubEl({ editable: true });
+  await withDoc({ '#prompt-textarea': composer }, () => {
+    const r = pageType({ composer: ['#prompt-textarea'], send: [] }, 'a normal prompt here');
+    assert.equal(r.__threw, undefined, 'success must not carry the failure marker');
+    assert.equal(r.ok, true);
+  }, { execCommandWorks: true });
+});
+
+/* ---------------------------------------------------------------------------
+ * THE PAGE-SIDE FENCE FALLBACK COULD NEVER FIRE.
+ *
+ * Measured on Arena in run 202608090835: all EIGHT `turns` selectors matched
+ * zero nodes (the surface scan says so directly — Arena exposes no testids and
+ * no semantic classes). The fence fallback was therefore the only remaining
+ * route to the reply.
+ *
+ * It searched for '```' + fence. `innerText` of a RENDERED code block has no
+ * backticks — the browser turned them into a <pre><code>. So it found nothing,
+ * every time. The same bug fixed in report.js at 217121a, still live here two
+ * modules away.
+ * ------------------------------------------------------------------------ */
+
+test('THE FENCE FALLBACK WORKS ON RENDERED TEXT, WHICH HAS NO BACKTICKS', async () => {
+  const { pageProbe } = await import('../src/transports/dom.js');
+  const report = 'ORCHESTRATOR-REPORT\n{ "taskStatus": "complete" }';
+  const dom = fakeDom({
+    html: { '[data-testid="composer"]': ['type here'] },   // composer only, as on Arena
+    bodyText: `Arena sidebar\nToggle Sidebar\nAgent Mode\n\nHere is the work.\n${report}`,
+  });
+
+  const out = withDom(dom, () => pageProbe(SELECTORS.engineer, 'ORCHESTRATOR-REPORT'));
+
+  assert.equal(out.turns, 0, 'the premise: no turn selector matches on Arena');
+  assert.equal(out.via, 'fence', 'the fallback must actually fire');
+  assert.match(out.lastText, /"taskStatus": "complete"/, 'the report must be recovered');
+  assert.ok(!out.lastText.includes('Toggle Sidebar'),
+    'it must start AT the fence, not hand the sidebar to the parser');
+});
+
+test('the backtick form is still preferred when the page shows markdown source', async () => {
+  const { pageProbe } = await import('../src/transports/dom.js');
+  const dom = fakeDom({
+    html: { '[data-testid="composer"]': ['x'] },
+    /*
+     * The bare mention comes LAST, so `lastIndexOf(fence)` would find it and a
+     * naive fallback would return the wrong text. The fenced block must win.
+     * With the previous fixture the bare mention came first and lastIndexOf
+     * picked the fenced one anyway — the test passed for the wrong reason and
+     * survived sabotage. Found by running the sabotage, not by reading.
+     */
+    bodyText: '```ORCHESTRATOR-REPORT\n{ "taskStatus": "partial" }\n```\n\n'
+      + 'PS: the ORCHESTRATOR-REPORT format is documented above.',
+  });
+  const out = withDom(dom, () => pageProbe(SELECTORS.engineer, 'ORCHESTRATOR-REPORT'));
+  assert.match(out.lastText, /"taskStatus": "partial"/,
+    'the fenced block is tighter and must win over a later bare mention');
+});

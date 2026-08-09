@@ -771,7 +771,16 @@ const COMMANDS = {
           /* Selectors are the most-changed thing in this project; shipping the
              exact set with the log removes a whole round trip. */
           selectors: SELECTORS,
-          config,
+          /*
+           * Read from storage, not from a closure.
+           *
+           * This said `config`, which is a LOCAL inside `buildRunner` and not
+           * in scope here. The manifest threw `config is not defined` on its
+           * first real use (run 202608090835) and the export lost the whole
+           * block -- the try/catch did its job and the log said so, which is
+           * the only reason this was a one-line fix rather than a mystery.
+           */
+          config: (await chrome.storage.local.get('config'))?.config ?? null,
           run: projectStore.run
             ? { id: projectStore.run.id, state: projectStore.run.state, iteration: projectStore.run.currentIteration }
             : null,

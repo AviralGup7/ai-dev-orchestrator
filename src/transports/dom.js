@@ -541,7 +541,24 @@ export function pageProbe(selectors, fence = 'ORCHESTRATOR-REPORT') {
    */
   if (!lastText) {
     const body = (document.body?.innerText || '').trim();
-    const at = body.lastIndexOf('```' + fence);
+    /*
+     * THE BACKTICKS ARE NOT THERE. Searching for them defeated this fallback.
+     *
+     * `innerText` of a RENDERED code block contains the fence NAME and the
+     * JSON and no backticks at all -- the browser turned them into a
+     * <pre><code>. This searched for '```' + fence, so on every real page it
+     * found nothing and the fallback never fired once.
+     *
+     * Exactly the bug fixed in report.js at 217121a, still live here two
+     * modules away. Measured on Arena in run 202608090835: all eight `turns`
+     * selectors matched zero nodes, so this fallback was the ONLY route left,
+     * and it could not work either.
+     *
+     * The backtick form is tried first for precision -- if the page really is
+     * showing markdown source, starting at the fence marker is tighter.
+     */
+    let at = body.lastIndexOf('```' + fence);
+    if (at === -1) at = body.lastIndexOf(fence);
     if (at !== -1) {
       lastText = body.slice(at);
       via = 'fence';

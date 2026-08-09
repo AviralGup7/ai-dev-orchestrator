@@ -23,6 +23,22 @@ import { REPORT_FENCE } from '../src/core/protocol.js';
  * plus a bubbling `input` event is what actually makes the framework notice.
  */
 export function pageType(selectors, text) {
+  /*
+   * SELF-REPORTING FAILURE.
+   *
+   * Chrome discards an in-page exception (crbug 1271527) and hands the
+   * extension `result: undefined`, so a throw here becomes the word
+   * "undefined" in the log. Catching it and returning it as data is the only
+   * way the reason survives the boundary.
+   */
+  try {
+    return typeIn(selectors, text);
+  } catch (err) {
+    return { __threw: true, ok: false, error: String(err?.message || err), stack: String(err?.stack || '').slice(0, 600) };
+  }
+}
+
+function typeIn(selectors, text) {
   const pick = (list) => { for (const s of list) { const el = document.querySelector(s); if (el) return el; } return null; };
   const el = pick(selectors.composer);
   if (!el) return { ok: false, why: 'no composer' };
@@ -157,6 +173,15 @@ function pickFrom(list) {
 
 /** Click send, preferring the button over a synthetic Enter. */
 export async function pageClick(selectors, which) {
+  /* See pageType: an in-page throw would otherwise arrive as `undefined`. */
+  try {
+    return await clickIn(selectors, which);
+  } catch (err) {
+    return { __threw: true, ok: false, error: String(err?.message || err), stack: String(err?.stack || '').slice(0, 600) };
+  }
+}
+
+async function clickIn(selectors, which) {
   const pick = (list) => { for (const s of list) { const el = document.querySelector(s); if (el) return el; } return null; };
 
   /*
@@ -291,6 +316,43 @@ export function createPageReader(getBinding) {
       world: 'MAIN',
     });
     if (!res) throw Object.assign(new Error('the page returned nothing'), { outcome: 'failed' });
+
+    /*
+     * AN IN-PAGE THROW MUST NOT ARRIVE AS `undefined`.
+     *
+     * Chrome does not implement `InjectionResult.error` (crbug 1271527; MDN
+     * states it outright). When an injected function throws -- or, being
+     * async, rejects -- Chrome reports `result: undefined` and writes the real
+     * error only to the TARGET PAGE's console, where a background worker can
+     * never read it.
+     *
+     * That is how run 202608090835 produced "could not submit on engineer:
+     * undefined": `undefined?.why` is `undefined`, so the one fact that
+     * mattered was destroyed at the boundary and replaced with a word.
+     *
+     * The injected functions therefore catch their own errors and return them
+     * as data (see `guarded` below). Wrapping them out here would require
+     * `eval` inside the page, which ChatGPT's and Arena's CSP forbid.
+     *
+     * This branch is the backstop for the case no try/catch can cover: the
+     * injection never completing at all.
+     */
+    if (res.result === undefined || res.result === null) {
+      throw Object.assign(
+        new Error(`${func.name || 'the injected function'} returned nothing — it threw inside the page, `
+          + 'the frame was destroyed, or the injection was blocked. Chrome does not report in-page '
+          + 'errors to the extension; check the page console.'),
+        { outcome: 'failed' },
+      );
+    }
+
+    if (res.result.__threw) {
+      throw Object.assign(
+        new Error(`${func.name || 'the injected function'} failed inside the page: ${res.result.error}`),
+        { outcome: 'failed', pageStack: res.result.stack },
+      );
+    }
+
     return res.result;
   };
 

@@ -992,8 +992,12 @@ const CASES = [
   {
     name: 'the fence fallback is removed, so a selector miss is fatal again',
     file: 'src/transports/dom.js',
-    from: "    const at = body.lastIndexOf('```' + fence);",
-    to: '    const at = -1;',
+    /* Anchor updated when the bare-fence fallback landed: this line used to
+       read `const at = body.lastIndexOf('```' + fence)`. A stale anchor makes
+       a sabotage silently stop testing anything, so the harness reports
+       PATCH DID NOT APPLY rather than counting it as caught. */
+    from: "    let at = body.lastIndexOf('```' + fence);\n    if (at === -1) at = body.lastIndexOf(fence);",
+    to: '    let at = -1;',
     expect: 'pageProbe FINDS THE REPORT BY ITS FENCE',
     test: 'test/transport.test.mjs',
   },
@@ -1253,6 +1257,33 @@ const CASES = [
     from: '      via: clicked?.via ?? null,',
     to: '      via: null,',
     expect: 'the submit event records HOW the message went',
+    test: 'test/transport.test.mjs',
+  },
+  {
+    /* Run 202608090835: "could not submit on engineer: undefined". Chrome does
+       not implement InjectionResult.error, so an in-page throw arrives as
+       result:undefined and `undefined?.why` becomes the word "undefined". */
+    name: 'an in-page throw is swallowed and reported as "undefined" again',
+    file: 'extension/dom-page.js',
+    from: "    return { __threw: true, ok: false, error: String(err?.message || err), stack: String(err?.stack || '').slice(0, 600) };\n  }\n}\n\nfunction typeIn",
+    to: '    throw err;\n  }\n}\n\nfunction typeIn',
+    expect: 'AN IN-PAGE THROW COMES BACK AS A REASON',
+    test: 'test/transport.test.mjs',
+  },
+  {
+    name: 'the page-side fence fallback requires backticks again',
+    file: 'src/transports/dom.js',
+    from: '    if (at === -1) at = body.lastIndexOf(fence);',
+    to: '    /* no bare-fence fallback */',
+    expect: 'THE FENCE FALLBACK WORKS ON RENDERED TEXT',
+    test: 'test/transport.test.mjs',
+  },
+  {
+    name: 'a bare fence mention overrides a properly fenced block',
+    file: 'src/transports/dom.js',
+    from: "    let at = body.lastIndexOf('```' + fence);\n    if (at === -1) at = body.lastIndexOf(fence);",
+    to: '    let at = body.lastIndexOf(fence);',
+    expect: 'the backtick form is still preferred',
     test: 'test/transport.test.mjs',
   },
   {
