@@ -56,7 +56,26 @@ export class AdapterError extends Error {
      * The recovery layer reads this rather than pattern-matching on messages,
      * which would break the first time an error string is reworded.
      */
-    this.recoverable = outcome === 'timed-out' || outcome === 'malformed';
+    /*
+     * A REPEATED REPLY IS NOT RECOVERABLE, WHATEVER ITS OUTCOME SAYS.
+     *
+     * `malformed` normally IS worth another attempt: the model may well fix
+     * itself when told what was wrong. But once it has returned a
+     * byte-identical answer to a prompt carrying the schema error, the fault
+     * is deterministic and every further attempt is a paid round trip that
+     * cannot succeed.
+     *
+     * Run 202608091410 shows the cost of missing this. The schema retry
+     * correctly stopped after one repeat -- and then the RUN-LEVEL ladder,
+     * reading `recoverable: true`, restarted the whole run three times. Six
+     * ChatGPT calls, three identical failures, ~2 minutes, one outcome.
+     *
+     * Set from the detail rather than pattern-matching the message, for the
+     * reason given above: messages get reworded, flags do not.
+     */
+    this.recoverable = detail?.repeated === true
+      ? false
+      : outcome === 'timed-out' || outcome === 'malformed';
   }
 }
 

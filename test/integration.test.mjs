@@ -265,7 +265,23 @@ test('an empty response is a failure, not an empty success', async () => {
    * silence — that is the manager's own output, and it produced none.
    */
   assert.equal(store.iterations[0]?.scores?.length ?? 0, 0, 'no scores may be invented from silence');
-  assert.match(String(store.run.stopDetail), /empty response|not respond|unusable/i);
+
+  /*
+   * `unusable` was in this alternation and made the assertion too loose.
+   *
+   * With the empty-reply guard removed, an empty string is now caught one
+   * layer later by the identical-reply check ("returned a byte-identical
+   * evaluation"), whose message routes through the same "unusable" wording.
+   * The test therefore passed with the guard sabotaged — it asserted that the
+   * run stopped, not that it stopped FOR THE RIGHT REASON. Reported by
+   * tools/sabotage.mjs, not by reading.
+   *
+   * An empty reply must be named as empty: "the model said nothing" and "the
+   * model said the same wrong thing twice" are different faults with
+   * different fixes.
+   */
+  assert.match(String(store.run.stopDetail), /empty response|did not respond/i,
+    'an empty reply must be diagnosed as empty, not folded into a generic "unusable"');
 });
 
 /* ================================================== persistence ========= */
@@ -506,4 +522,106 @@ test('a model that CORRECTS itself on retry still succeeds', async () => {
   const out = await adapter.evaluate({ objective: { text: 'x' }, summary: 's', evidence: [], scope: 'p' });
   assert.equal(calls, 2, 'the retry must actually be attempted');
   assert.ok(out, 'a corrected reply must be accepted');
+});
+
+/* ---------------------------------------------------------------------------
+ * THE MANAGER PATH HAD ITS OWN, WEAKER PARSER (run 202608091410)
+ *
+ * `manager.js:extractJson` is a second copy of `report.js`'s extractor. Every
+ * repair made there had to be made here too, and was not:
+ *
+ *   per-line backticks       fixed in report.js at 25a94a1 — missing here
+ *   bare fence, no backticks fixed in report.js at 217121a — missing here
+ *
+ * ChatGPT returned its evaluation with every line in inline code. The
+ * last-resort branch sliced first-{ to last-} and produced
+ * `{`\n`  "scores"…`, failing at "position 2 (line 1 column 3)" — precisely
+ * what the log records. The run died on a formatting detail the engineer path
+ * had already learned to handle.
+ * ------------------------------------------------------------------------ */
+
+const EVAL_JSON = '{"scores":[{"dimension":"testing","score":80,"confidence":"measured","basis":"ran the suite"}],'
+  + '"issues":[],"resolved":[]}';
+
+test('THE MANAGER PARSES AN EVALUATION WRAPPED IN PER-LINE BACKTICKS', async () => {
+  const { extractJson } = await import('../src/adapters/manager.js');
+  const backticked = ['`{`', '`  "scores": [],`', '`  "issues": []`', '`}`'].join('\n');
+
+  const raw = extractJson('Here is my evaluation.\n\n' + backticked, 'ORCHESTRATOR-EVALUATION');
+  assert.ok(raw, 'a block must be found');
+  assert.doesNotThrow(() => JSON.parse(raw),
+    'this exact shape ended three runs with "position 2 (line 1 column 3)"');
+  assert.deepEqual(JSON.parse(raw), { scores: [], issues: [] });
+});
+
+test('the manager accepts every reply shape the engineer path accepts', async () => {
+  /*
+   * The point of the fix is parity. Two extractors that disagree about what a
+   * valid reply looks like is how the engineer path ends up hardened and the
+   * manager path does not.
+   */
+  const { extractJson } = await import('../src/adapters/manager.js');
+  const shapes = {
+    'fenced with the marker': '```ORCHESTRATOR-EVALUATION\n' + EVAL_JSON + '\n```',
+    'a plain ```json fence': '```json\n' + EVAL_JSON + '\n```',
+    'the bare marker, no backticks': 'ORCHESTRATOR-EVALUATION\n' + EVAL_JSON,
+    'naked JSON amid prose': 'Here you go:\n' + EVAL_JSON + '\nHope that helps.',
+  };
+  for (const [name, text] of Object.entries(shapes)) {
+    const raw = extractJson(text, 'ORCHESTRATOR-EVALUATION');
+    assert.doesNotThrow(() => JSON.parse(String(raw)), `failed on: ${name}`);
+  }
+});
+
+test('a markdown fence is not eaten by the manager unwrap', async () => {
+  /*
+   * ``` is itself a line starting and ending with a backtick. The same naive
+   * rule that broke four tests in report.js would break the block here too.
+   */
+  const { extractJson } = await import('../src/adapters/manager.js');
+
+  /*
+   * Asserting only that the result parses is too weak: a mangled closing
+   * fence still gets rescued by the naked-JSON fallback, so the test passed
+   * with the bug present and survived its own sabotage. Found by running the
+   * sabotage, not by reading.
+   *
+   * The block must therefore contain PROSE AFTER the fence that a
+   * first-{-to-last-} fallback would swallow. Only an intact fence excludes
+   * it.
+   */
+  const text = '```ORCHESTRATOR-EVALUATION\n' + EVAL_JSON + '\n```\n\nLet me know if { anything } needs changing.';
+  const raw = extractJson(text, 'ORCHESTRATOR-EVALUATION');
+
+  assert.equal(JSON.parse(raw).scores[0].score, 80);
+  assert.ok(!String(raw).includes('needs changing'),
+    'the closing fence must still bound the block — a mangled fence lets trailing prose in');
+});
+
+test('a backtick inside a string value survives the manager unwrap', async () => {
+  const { extractJson } = await import('../src/adapters/manager.js');
+  const withCode = JSON.stringify({ scores: [], issues: ['run `npm test` first'], resolved: [] });
+  const lines = JSON.stringify(JSON.parse(withCode), null, 2).split('\n').map((l) => '`' + l + '`').join('\n');
+  const parsed = JSON.parse(extractJson('ORCHESTRATOR-EVALUATION\n' + lines, 'ORCHESTRATOR-EVALUATION'));
+  assert.equal(parsed.issues[0], 'run `npm test` first',
+    'prose fields quote shell commands; corrupting one silently is worse than failing');
+});
+
+/* ---------------------------------------------------------------------------
+ * A REPEATED REPLY MUST NOT BE RETRIED AT THE RUN LEVEL EITHER.
+ *
+ * The schema retry stopped correctly after one repeat. The RUN-level recovery
+ * ladder then read `recoverable: true` and restarted the whole run three
+ * times: six ChatGPT calls, three identical failures, one outcome.
+ * ------------------------------------------------------------------------ */
+
+test('A BYTE-IDENTICAL REPLY IS NOT MARKED RECOVERABLE', async () => {
+  const { AdapterError } = await import('../src/adapters/base.js');
+
+  assert.equal(new AdapterError('malformed', 'x', { repeated: true }).recoverable, false,
+    'the run-level ladder retried this three times against a deterministic fault');
+  assert.equal(new AdapterError('malformed', 'x', {}).recoverable, true,
+    'an ordinary malformed reply is still worth one more attempt — the model may self-correct');
+  assert.equal(new AdapterError('timed-out', 'x', {}).recoverable, true,
+    'a timeout is still recoverable');
 });

@@ -26,7 +26,32 @@ const EVAL_FENCE = 'ORCHESTRATOR-EVALUATION';
 
 /** Pull the last fenced block, tolerating chattiness and a dropped marker. */
 export function extractJson(text, fence) {
-  const src = String(text ?? '');
+  /*
+   * THE SAME HARDENING THE ENGINEER PATH ALREADY HAS.
+   *
+   * This function is a SECOND, weaker copy of `report.js`'s extractor. Every
+   * repair made there had to be made here too, and was not:
+   *
+   *   - per-line backticks       fixed in report.js at 25a94a1, missing here
+   *   - bare fence, no backticks fixed in report.js at 217121a, missing here
+   *
+   * Run 202608091410 is the bill for that. ChatGPT returned its evaluation
+   * with every line wrapped in inline code, the last-resort branch below
+   * sliced from the first `{` to the last `}` and produced
+   *
+   *   {`\n`  "scores": [],`\n`  "issues": []`\n`}
+   *
+   * which fails at "position 2 (line 1 column 3)" -- exactly what the log
+   * says. The manager repeated itself, the new identical-reply guard fired
+   * correctly, and the run ended on a formatting detail the engineer path
+   * had already learned to handle.
+   *
+   * Unwrapping here rather than importing report.js's helper keeps the
+   * adapter free of a dependency on the engineer's report format, which is a
+   * different contract. The duplication of the RULE is deliberate; the
+   * duplication of the BUG was not.
+   */
+  const src = unwrapLineBackticks(String(text ?? ''));
   const tagged = new RegExp('```[ \\t]*' + fence + '[ \\t]*\\r?\\n([\\s\\S]*?)```', 'gi');
   let m, last = null;
   while ((m = tagged.exec(src)) !== null) last = m[1];
@@ -44,6 +69,21 @@ export function extractJson(text, fence) {
   const a = src.indexOf('{');
   const b = src.lastIndexOf('}');
   return a !== -1 && b > a ? src.slice(a, b + 1) : null;
+}
+
+/**
+ * Undo per-line inline-code wrapping: `  "a": 1,`  ->    "a": 1,
+ *
+ * Conservative by construction. A line must open AND close with exactly one
+ * backtick and hold at least one character between them, so:
+ *   - a markdown fence (``` or ```json) is untouched -- it opens with two
+ *     more backticks, and eating it would destroy the block this protects;
+ *   - a backtick INSIDE a string value survives, because prose fields quote
+ *     shell commands and silently corrupting one is worse than failing.
+ */
+function unwrapLineBackticks(text) {
+  if (!text.includes('`')) return text;
+  return text.replace(/^([ \t]*)`([^`].*?)`[ \t]*$/gm, '$1$2');
 }
 
 function parseJson(text, fence) {

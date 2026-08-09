@@ -1333,6 +1333,33 @@ const CASES = [
     test: 'test/integration.test.mjs',
   },
   {
+    /* Run 202608091410: manager.js is a SECOND extractor that never received
+       the hardening report.js got, so ChatGPT's backticked JSON killed three
+       runs on a shape the engineer path already handled. */
+    name: 'the manager extractor loses its backtick unwrap',
+    file: 'src/adapters/manager.js',
+    from: "  if (!text.includes('`')) return text;",
+    to: '  return text;',
+    expect: 'THE MANAGER PARSES AN EVALUATION WRAPPED IN PER-LINE BACKTICKS',
+    test: 'test/integration.test.mjs',
+  },
+  {
+    name: 'the manager unwrap eats markdown fences',
+    file: 'src/adapters/manager.js',
+    from: "  return text.replace(/^([ \\t]*)`([^`].*?)`[ \\t]*$/gm, '$1$2');",
+    to: "  return text.replace(/^([ \\t]*)`(.*)`[ \\t]*$/gm, '$1$2');",
+    expect: 'a markdown fence is not eaten by the manager unwrap',
+    test: 'test/integration.test.mjs',
+  },
+  {
+    name: 'a repeated reply is marked recoverable, so the run retries it',
+    file: 'src/adapters/base.js',
+    from: "    this.recoverable = detail?.repeated === true\n      ? false\n      : outcome === 'timed-out' || outcome === 'malformed';",
+    to: "    this.recoverable = outcome === 'timed-out' || outcome === 'malformed';",
+    expect: 'A BYTE-IDENTICAL REPLY IS NOT MARKED RECOVERABLE',
+    test: 'test/integration.test.mjs',
+  },
+  {
     name: 'the scanner stops ranking and takes document order',
     file: 'extension/scan.js',
     from: '  candidates.sort((a, b) => b.rank - a.rank);',
