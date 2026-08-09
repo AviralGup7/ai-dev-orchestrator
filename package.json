@@ -13,7 +13,8 @@
     "build": "node tools/build-extension.mjs && node tools/check-loadable.mjs",
     "demo": "node tools/build-demo.mjs",
     "smoke": "node tools/smoke-demo.mjs",
-    "check": "npm run purity && npm run env-safety && npm run secrets && npm test && npm run build && npm run demo"
+    "check": "npm run purity && npm run env-safety && npm run secrets && npm run injectable && npm test && npm run build && npm run demo",
+    "injectable": "node tools/check-injectable.mjs"
   },
   "engines": {
     "node": ">=20"

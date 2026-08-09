@@ -24,21 +24,31 @@ import { REPORT_FENCE } from './core/protocol.js';
  */
 export function pageType(selectors, text) {
   /*
-   * SELF-REPORTING FAILURE.
+   * SELF-REPORTING FAILURE, AND EVERYTHING IT NEEDS IS INSIDE THIS FUNCTION.
    *
-   * Chrome discards an in-page exception (crbug 1271527) and hands the
-   * extension `result: undefined`, so a throw here becomes the word
-   * "undefined" in the log. Catching it and returning it as data is the only
-   * way the reason survives the boundary.
+   * Two rules meet here and the second one bit:
+   *
+   *   1. Chrome discards an in-page exception (crbug 1271527) and hands the
+   *      extension `result: undefined`, so a throw becomes the word
+   *      "undefined" in the log. Catching it and returning it as data is the
+   *      only way the reason survives the boundary.
+   *
+   *   2. THIS FUNCTION IS SERIALISED BY executeScript AND LOSES ITS CLOSURE.
+   *      It is re-evaluated inside the page as a standalone function. A
+   *      module-level helper it calls DOES NOT EXIST there.
+   *
+   * Adding the try/catch for rule 1, I extracted the body into a `typeIn`
+   * helper and broke rule 2 -- which the file already documents twice, once
+   * about `fence` and once about `selectors`. Run 202608091243 failed with
+   * "pageType failed inside the page: typeIn is not defined". The error
+   * handling added for rule 1 is what reported it precisely, so the fix took
+   * one log line to find.
+   *
+   * The body is therefore INLINE. No helper this function calls may live at
+   * module scope.
    */
   try {
-    return typeIn(selectors, text);
-  } catch (err) {
-    return { __threw: true, ok: false, error: String(err?.message || err), stack: String(err?.stack || '').slice(0, 600) };
-  }
-}
-
-function typeIn(selectors, text) {
+    return (() => {
   const pick = (list) => { for (const s of list) { const el = document.querySelector(s); if (el) return el; } return null; };
   const el = pick(selectors.composer);
   if (!el) return { ok: false, why: 'no composer' };
@@ -151,7 +161,7 @@ function typeIn(selectors, text) {
    */
   let enabledSend = null;
   try {
-    const send = pickFrom(selectors.send);
+    const send = pick(selectors.send);   // `pick` is local; pickFrom is module scope and unreachable here
     enabledSend = send
       ? !(send.disabled || send.getAttribute?.('aria-disabled') === 'true')
       : false;
@@ -160,28 +170,28 @@ function typeIn(selectors, text) {
   }
 
   return { ok: true, chars: text.length, readBack: got.length, enabledSend, via: usedExecCommand ? 'execCommand' : 'dom' };
-}
-
-/** Shared selector walk. Defined once so `pageType` and `pageClick` agree. */
-function pickFrom(list) {
-  for (const s of list || []) {
-    const el = document.querySelector(s);
-    if (el) return el;
-  }
-  return null;
-}
-
-/** Click send, preferring the button over a synthetic Enter. */
-export async function pageClick(selectors, which) {
-  /* See pageType: an in-page throw would otherwise arrive as `undefined`. */
-  try {
-    return await clickIn(selectors, which);
+    })();
   } catch (err) {
     return { __threw: true, ok: false, error: String(err?.message || err), stack: String(err?.stack || '').slice(0, 600) };
   }
 }
 
-async function clickIn(selectors, which) {
+/*
+ * There is deliberately NO shared selector-walk helper at module scope.
+ *
+ * `pageType` and `pageClick` are serialised by executeScript and re-evaluated
+ * inside the page, where module scope does not exist. Every helper they use
+ * must be declared INSIDE them, even at the cost of a duplicated three-line
+ * `pick`. A shared helper here is not DRY, it is a runtime error waiting for
+ * the next real run -- which is exactly what happened in 202608091243.
+ */
+
+/** Click send, preferring the button over a synthetic Enter. */
+export async function pageClick(selectors, which) {
+  /* See pageType: an in-page throw arrives as `undefined` without this, and
+     the body must be inline because module scope does not exist in the page. */
+  try {
+    return await (async () => {
   const pick = (list) => { for (const s of list) { const el = document.querySelector(s); if (el) return el; } return null; };
 
   /*
@@ -273,27 +283,34 @@ async function clickIn(selectors, which) {
     why: 'the send button was clicked but the composer still holds the prompt — the click was not accepted '
       + '(a synthetic click carries isTrusted: false, which some handlers reject)',
   };
-}
 
-/**
- * Did the composer clear? Polled for ~2s.
- *
- * The one signal that means "the page took the message". Checked rather than
- * assumed, because both submit routes can silently no-op: a synthetic click
- * carries `isTrusted: false`, and Enter is ignored when the editor's model
- * never received the text.
- *
- * A composer we cannot read returns `true` -- absence of evidence must not
- * become a failure, or surfaces that clear differently would break.
- */
-async function composerEmptied(composer) {
-  if (!composer) return true;
-  const read = () => (composer.isContentEditable ? composer.textContent : composer.value) || '';
-  for (let i = 0; i < 20; i++) {
-    if (read().trim().length === 0) return true;
-    await new Promise((r) => setTimeout(r, 100));
+  /*
+   * Did the composer clear? Polled for ~2s.
+   *
+   * The one signal that means "the page took the message". Checked rather than
+   * assumed, because both submit routes can silently no-op: a synthetic click
+   * carries `isTrusted: false`, and Enter is ignored when the editor's model
+   * never received the text.
+   *
+   * A composer we cannot read returns `true` -- absence of evidence must not
+   * become a failure, or surfaces that clear differently would break.
+   *
+   * Declared INSIDE the injected function. Hoisting means the calls above it
+   * still resolve, and module scope does not exist in the page.
+   */
+  async function composerEmptied(el) {
+    if (!el) return true;
+    const read = () => (el.isContentEditable ? el.textContent : el.value) || '';
+    for (let i = 0; i < 20; i++) {
+      if (read().trim().length === 0) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
   }
-  return false;
+    })();
+  } catch (err) {
+    return { __threw: true, ok: false, error: String(err?.message || err), stack: String(err?.stack || '').slice(0, 600) };
+  }
 }
 
 /**

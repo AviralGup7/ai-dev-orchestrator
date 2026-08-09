@@ -1203,8 +1203,10 @@ const CASES = [
   {
     name: 'an unreadable composer becomes a false submit failure',
     file: 'extension/dom-page.js',
-    from: '  if (!composer) return true;',
-    to: '  if (!composer) return false;',
+    /* Anchor updated when composerEmptied was inlined into pageClick (the
+       injected function may not call module scope) and its parameter renamed. */
+    from: '    if (!el) return true;',
+    to: '    if (!el) return false;',
     expect: 'an unreadable composer does not become a false submit failure',
     test: 'test/transport.test.mjs',
   },
@@ -1265,8 +1267,11 @@ const CASES = [
        result:undefined and `undefined?.why` becomes the word "undefined". */
     name: 'an in-page throw is swallowed and reported as "undefined" again',
     file: 'extension/dom-page.js',
-    from: "    return { __threw: true, ok: false, error: String(err?.message || err), stack: String(err?.stack || '').slice(0, 600) };\n  }\n}\n\nfunction typeIn",
-    to: '    throw err;\n  }\n}\n\nfunction typeIn',
+    /* Anchor updated when typeIn was inlined. Targets the FIRST catch in the
+       file, which is pageType's -- removing it restores the pre-fix behaviour
+       where an in-page throw reached the extension as `undefined`. */
+    from: "  } catch (err) {\n    return { __threw: true, ok: false, error: String(err?.message || err), stack: String(err?.stack || '').slice(0, 600) };\n  }\n}",
+    to: '  } catch (err) {\n    throw err;\n  }\n}',
     expect: 'AN IN-PAGE THROW COMES BACK AS A REASON',
     test: 'test/transport.test.mjs',
   },

@@ -13,7 +13,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 /**
  * A DOM stub with just enough behaviour for createPanel and a synthetic click.
@@ -917,4 +918,88 @@ test('a finished run logs WHY it finished, not just that it did', async () => {
   });
   assert.match(logger.live[0].description, /reached the 6-iteration limit/,
     '"Run ended" with no reason is the least useful line in the log');
+});
+
+/* ---------------------------------------------------------------------------
+ * INJECTED FUNCTIONS MUST BE SELF-CONTAINED (run 202608091243)
+ *
+ * `executeScript({ func })` serialises the function and re-evaluates it in the
+ * page: "any bound parameters and execution context will be lost." A
+ * module-scope helper it calls is simply not defined there.
+ *
+ * This rule has now been broken THREE times in the same file — `fence`,
+ * `selectors`, and then `typeIn`/`pickFrom`/`composerEmptied` — each time with
+ * a comment about the previous violation sitting a few lines above. A comment
+ * is not enforcement, so it is a build check now.
+ * ------------------------------------------------------------------------ */
+
+test('EVERY INJECTED FUNCTION IS FREE OF MODULE-SCOPE REFERENCES', () => {
+  const out = execFileSync(process.execPath, ['tools/check-injectable.mjs'], { encoding: 'utf8' });
+  assert.match(out, /injected functions are self-contained/);
+});
+
+test('the check covers every function actually passed to executeScript', () => {
+  /*
+   * The check is only worth having if its list matches reality. A function
+   * added to an executeScript call and not to TARGETS is unprotected, which is
+   * precisely how pageProbe and scanPage sat unchecked while pageType broke.
+   */
+  const tool = readFileSync('tools/check-injectable.mjs', 'utf8');
+  const declared = new Set([...tool.matchAll(/fns:\s*\[([^\]]+)\]/g)]
+    .flatMap((m) => m[1].split(',').map((s) => s.trim().replace(/['"]/g, ''))));
+
+  /*
+   * Two shapes reach executeScript: a literal `func: name`, and dom-page.js's
+   * `run(surface, fn, args)` indirection where the function arrives as a
+   * variable. Both are collected — an injected function that is not in TARGETS
+   * is unprotected, which is exactly how pageProbe and scanPage sat unchecked
+   * while pageType broke.
+   */
+  const injected = new Set();
+  for (const f of ['extension/dom-page.js', 'extension/scan.js', 'src/transports/dom.js']) {
+    const text = readFileSync(f, 'utf8');
+    for (const m of text.matchAll(/func:\s*(\w+)/g)) if (m[1] !== 'func') injected.add(m[1]);
+    for (const m of text.matchAll(/run\(surface,\s*(\w+)/g)) injected.add(m[1]);
+  }
+
+  for (const fn of injected) {
+    assert.ok(declared.has(fn),
+      `${fn} is passed to executeScript but is not checked — add it to TARGETS`);
+  }
+  assert.ok(injected.size >= 3,
+    `expected at least pageProbe, pageType and pageClick, found ${[...injected].join(', ') || 'none'}`);
+});
+
+test('the check FAILS when an injected function calls module scope', () => {
+  /*
+   * A check that cannot fail is decoration. Verified against a temporary copy
+   * rather than by trusting the implementation.
+   */
+  const src = readFileSync('extension/dom-page.js', 'utf8');
+  const broken = src.replace(
+    '    const send = pick(selectors.send);',
+    '    const send = brokenHelper(selectors.send);',
+  ) + '\nfunction brokenHelper(list) { return null; }\n';
+
+  assert.notEqual(broken, src, 'the fixture must actually differ from the source');
+
+  const tmp = 'extension/.injectable-fixture.js';
+  writeFileSync(tmp, broken);
+  try {
+    const tool = readFileSync('tools/check-injectable.mjs', 'utf8')
+      .replace("file: 'extension/dom-page.js'", `file: '${tmp}'`);
+    const tmpTool = 'tools/.injectable-fixture.mjs';
+    writeFileSync(tmpTool, tool);
+    try {
+      execFileSync(process.execPath, [tmpTool], { encoding: 'utf8', stdio: 'pipe' });
+      assert.fail('the check passed on a file that calls module scope from an injected function');
+    } catch (err) {
+      assert.match(String(err.stderr || ''), /brokenHelper/,
+        'it must name the offending helper');
+    } finally {
+      rmSync(tmpTool, { force: true });
+    }
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 });
