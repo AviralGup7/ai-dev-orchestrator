@@ -446,3 +446,64 @@ test('the logged sample is REDACTED like every other captured text', async () =>
   assert.ok(!bad.head.includes('ghp_' + 'A'.repeat(36)),
     'a credential echoed by the model must not reach the exported log');
 });
+
+/* ---------------------------------------------------------------------------
+ * AN IDENTICAL REPLY MEANS THE RETRY CANNOT HELP (run 202608091336)
+ *
+ * The manager returned 1717 characters, failed to parse, was re-asked with the
+ * schema error attached, and returned 1717 characters again — byte for byte
+ * the same reply. The second round trip cost ~47 seconds, produced the
+ * identical failure, and ended the run.
+ * ------------------------------------------------------------------------ */
+
+test('A BYTE-IDENTICAL REPLY SHORT-CIRCUITS THE SCHEMA RETRY', async () => {
+  const { ManagerAdapter } = await import('../src/adapters/manager.js');
+  const events = [];
+  let calls = 0;
+  const stubborn = 'here is my evaluation, unparseable and unchanging';
+
+  const adapter = new ManagerAdapter({
+    transport: { async send() { calls++; return { text: stubborn }; } },
+    onEvent: (e) => events.push(e),
+    policy: { backoffMs: 1 },
+  });
+
+  const err = await adapter.evaluate({ objective: { text: 'x' }, summary: 's', evidence: [], scope: 'p' })
+    .then(() => null, (e) => e);
+
+  assert.ok(err, 'an unparseable evaluation must still fail');
+  assert.equal(calls, 2, `expected the retry to stop after one repeat, got ${calls} calls`);
+  assert.match(err.message, /byte-identical/,
+    'the message must say WHY retrying stopped, not just that it failed');
+  assert.equal(err.detail?.repeated, true);
+  assert.ok(events.some((e) => e.type === 'response-repeated'),
+    'the log must record that the model repeated itself');
+});
+
+test('a model that CORRECTS itself on retry still succeeds', async () => {
+  /*
+   * The counterweight, and the reason the retry exists at all. Short-circuiting
+   * on any second attempt would throw away the case this feature was built
+   * for: the model reads the schema error and fixes its output.
+   */
+  const { ManagerAdapter } = await import('../src/adapters/manager.js');
+  const good = JSON.stringify({
+    scores: [{ dimension: 'testing', score: 80, confidence: 'measured', basis: 'ran the suite' }],
+    issues: [], resolved: [],
+  });
+  let calls = 0;
+  const adapter = new ManagerAdapter({
+    transport: {
+      async send() {
+        calls++;
+        return { text: calls === 1 ? 'sorry, not JSON' : '```ORCHESTRATOR-EVALUATION\n' + good + '\n```' };
+      },
+    },
+    onEvent: () => {},
+    policy: { backoffMs: 1 },
+  });
+
+  const out = await adapter.evaluate({ objective: { text: 'x' }, summary: 's', evidence: [], scope: 'p' });
+  assert.equal(calls, 2, 'the retry must actually be attempted');
+  assert.ok(out, 'a corrected reply must be accepted');
+});

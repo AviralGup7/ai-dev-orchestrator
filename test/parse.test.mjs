@@ -310,3 +310,112 @@ test('a TRUNCATED report is still reported as truncated, not silently half-parse
   const cut = 'ORCHESTRATOR-REPORT\n{ "taskStatus": "complete", "summary": "it was going so we';
   assert.equal(extractBlock(cut), null, 'an unclosed object must not be returned');
 });
+
+/* ---------------------------------------------------------------------------
+ * PROSE IS NOT A TEST RESULT (evaluation of 2026-08-09)
+ *
+ * The mocha pattern was a bare /(\d+)\s+passing/i, which matches English. It
+ * fired on this sentence from a prose exploration report:
+ *
+ *   "Journal and its render() method exist and carry 7 passing tests,
+ *    but grep finds no production import."
+ *
+ * and reported "7 passed, 0 failed — read by mocha from terminal". A reviewer
+ * then scored `testing` as MEASURED on the strength of it.
+ *
+ * That is the exact failure this project exists to prevent: asserted scores
+ * are excluded from the completion criteria so uncertainty stays visible, and
+ * fabricating a `measured` defeats the whole mechanism. This project does not
+ * even use mocha — package.json runs `node --test`.
+ * ------------------------------------------------------------------------ */
+
+test('A SENTENCE MENTIONING "PASSING" IS NOT SCRAPED AS A TEST RESULT', () => {
+  const prose = 'src/core/journal.js:75 — Journal and its render() method exist and '
+    + 'carry 7 passing tests, but grep finds no production import.';
+  assert.equal(parseTests(prose, ctx), null,
+    'this exact sentence produced a false `measured` testing score');
+});
+
+test('other prose shapes are rejected too', () => {
+  for (const s of [
+    'we now have 12 passing specs in the suite',
+    'The suite went from 3 passing to 40 passing overall.',
+    'it should end up passing 5 arguments to the callback',
+  ]) {
+    assert.equal(parseTests(s, ctx), null, `false positive on: ${s}`);
+  }
+});
+
+test('REAL mocha output is still parsed — the guard must not break the true case', () => {
+  /*
+   * The counterweight. Tightening a parser until it rejects everything is not
+   * a fix; the legitimate case has to keep working.
+   */
+  const real = '\n  Array\n    ✓ returns -1 when not present\n\n  1276 passing (41s)\n  3 failing\n  2 pending\n';
+  const t = parseTests(real, ctx);
+  assert.ok(t, 'genuine mocha output must still parse');
+  assert.equal(t.passed, 1276);
+  assert.equal(t.failed, 3);
+  assert.equal(t.skipped, 2);
+  assert.equal(t.provenance.parser, 'mocha');
+});
+
+test('a mocha count indented by its reporter still parses', () => {
+  assert.equal(parseTests('        41 passing (2s)', ctx)?.passed, 41);
+});
+
+/* ---------------------------------------------------------------------------
+ * PER-LINE BACKTICKS (run 202608091336)
+ *
+ * ChatGPT sometimes renders a JSON block as inline code LINE BY LINE, so every
+ * line arrives wrapped in its own pair of backticks. The run failed twice with
+ * "Expected property name or '}' in JSON at position 2" — position 2 being the
+ * closing backtick where a property name should be — and then ended.
+ * ------------------------------------------------------------------------ */
+
+const REPORT = {
+  taskStatus: 'complete', summary: 's', filesModified: [],
+  build: { ran: true, ok: true, command: 'npm run build', output: 'ok' },
+  tests: { ran: true, passed: 471, failed: 0, skipped: 0, command: 'node --test' },
+  commit: { made: true, sha: 'abc1234', message: 'm' },
+  knownIssues: [], risks: [], engineeringReport: 'r',
+};
+
+test('A REPORT WRAPPED IN PER-LINE BACKTICKS PARSES', () => {
+  const lines = JSON.stringify(REPORT, null, 2).split('\n').map((l) => '`' + l + '`').join('\n');
+  const p = parseReport('Here you go.\n\nORCHESTRATOR-REPORT\n' + lines);
+  assert.equal(p.ok, true, `two round trips and a whole run were lost to this: ${p.problems?.join('; ')}`);
+  assert.equal(p.report.tests.passed, 471);
+});
+
+test('a backtick INSIDE a string value survives', () => {
+  /*
+   * The unwrap must be conservative. `engineeringReport` is free prose and
+   * routinely quotes shell commands; eating those backticks would corrupt the
+   * report while appearing to succeed, which is worse than failing.
+   */
+  const withCode = { ...REPORT, engineeringReport: 'I ran `npm test` and then `git push`' };
+  const lines = JSON.stringify(withCode, null, 2).split('\n').map((l) => '`' + l + '`').join('\n');
+  const p = parseReport('ORCHESTRATOR-REPORT\n' + lines);
+  assert.equal(p.ok, true);
+  assert.equal(p.report.engineeringReport, 'I ran `npm test` and then `git push`',
+    'inner backticks must be preserved exactly');
+});
+
+test('A MARKDOWN FENCE IS NOT MISTAKEN FOR INLINE CODE', () => {
+  /*
+   * ``` is itself a line that starts and ends with a backtick. A naive unwrap
+   * shortens the closing fence to a single ` and destroys the block it was
+   * meant to protect. Four existing tests caught this during development.
+   */
+  const fenced = '```ORCHESTRATOR-REPORT\n' + JSON.stringify(REPORT) + '\n```';
+  const p = parseReport(fenced);
+  assert.equal(p.ok, true, 'the ordinary fenced form must keep working');
+  assert.equal(p.report.commit.sha, 'abc1234');
+});
+
+test('an empty inline-code line is left alone', () => {
+  /* `` is two backticks with nothing between: not a wrapped line. */
+  const p = parseReport('ORCHESTRATOR-REPORT\n``\n' + JSON.stringify(REPORT));
+  assert.equal(p.ok, true);
+});

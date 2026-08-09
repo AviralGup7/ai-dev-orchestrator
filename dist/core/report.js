@@ -62,7 +62,24 @@ const FORBIDDEN_FIELDS = [
  * correction last).
  */
 export function extractBlock(text, fence = REPORT_FENCE) {
-  const src = String(text ?? '');
+  /*
+   * PER-LINE BACKTICKS ARE STRIPPED BEFORE ANYTHING ELSE LOOKS AT THE TEXT.
+   *
+   * ChatGPT sometimes renders JSON as inline code line by line, so every line
+   * arrives wrapped in its own pair of backticks. `relaxed()` repairs that,
+   * but `relaxed` runs on a block this function has already located -- and
+   * the brace matcher that locates it walks raw characters, so it mis-scans
+   * the moment backticks appear between the braces.
+   *
+   * Run 202608091336 failed twice on this and ended the run. Stripping here,
+   * once, means every downstream path (fenced, generic, bare-fence) sees
+   * clean lines.
+   *
+   * Only a line that BOTH starts and ends with a backtick is unwrapped, so a
+   * backtick inside a string value -- a shell command quoted in
+   * `engineeringReport` -- survives untouched.
+   */
+  const src = unwrapLineBackticks(String(text ?? ''));
   const re = new RegExp('```[ \\t]*' + fence + '[ \\t]*\\r?\\n([\\s\\S]*?)```', 'gi');
   let match = null;
   let last = null;
@@ -178,8 +195,50 @@ function firstJsonObject(src, from) {
  * eventually "fix" a malformed report into a plausible wrong one, and a wrong
  * report that parses is far more dangerous than one that fails loudly.
  */
+/**
+ * Undo per-line inline-code wrapping: `  "a": 1,`  ->    "a": 1,
+ *
+ * Conservative on purpose. A line must open AND close with a backtick, and
+ * only the outermost pair is removed; anything else is left exactly as sent.
+ */
+function unwrapLineBackticks(text) {
+  if (!text.includes('`')) return text;
+  /*
+   * A MARKDOWN FENCE IS NOT INLINE CODE.
+   *
+   * ``` and ```json are lines that begin and end with a backtick, so a naive
+   * rule shortens the closing fence to a single ` and destroys the very block
+   * this function exists to protect. Four existing tests caught it.
+   *
+   * Requirements for an unwrap: exactly ONE backtick at each end, and at
+   * least one character between them.
+   */
+  return text.replace(/^([ \t]*)`([^`].*?)`[ \t]*$/gm, '$1$2');
+}
+
 function relaxed(json) {
   return String(json)
+    /*
+     * PER-LINE BACKTICKS.
+     *
+     * ChatGPT sometimes renders a JSON block as inline code LINE BY LINE, so
+     * every line arrives wrapped in its own pair:
+     *
+     *   `{`
+     *   `  "scores": [`
+     *   `}`
+     *
+     * Run 202608091336 hit this twice and failed the whole run: "the JSON
+     * block did not parse: Expected property name or '}' at position 2".
+     * Position 2 is the tell -- character 0 is a backtick, 1 is the brace, 2
+     * is the closing backtick where a property name should be.
+     *
+     * Stripped ONLY when a line both starts and ends with a backtick, so a
+     * backtick inside a string value (a shell command in `engineeringReport`,
+     * say) is untouched. Applied before the trailing-comma repair because it
+     * changes what the line ends with.
+     */
+    .replace(/^[ \t]*`(.*)`[ \t]*$/gm, '$1')
     .replace(/,\s*([}\]])/g, '$1')      // trailing commas
     .replace(/^\uFEFF/, '');            // BOM
 }

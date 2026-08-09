@@ -489,6 +489,7 @@ const ADAPTER_EVENTS = {
   'execution-requested': 'task-started',
   'execution-completed': 'task-complete',
   'response-malformed': 'error',
+  'response-repeated': 'error',
   'report-contradiction': 'error',
   'evidence-recovered': 'evidence-collected',
 };

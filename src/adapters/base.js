@@ -146,9 +146,45 @@ export class Adapter {
   async exchange({ prompt, validate, what, iteration = null }) {
     let currentPrompt = prompt;
     let lastValidation = null;
+    let previousText = null;
 
     for (let schemaAttempt = 0; schemaAttempt <= this.policy.schemaRetries; schemaAttempt++) {
       const text = await this.sendWithRetries(currentPrompt, { what, iteration });
+
+      /*
+       * AN IDENTICAL REPLY MEANS THE RETRY CANNOT HELP.
+       *
+       * The reprompt attaches the schema error and asks again. That is worth
+       * one attempt when the model can correct itself -- and worth nothing
+       * when the fault is deterministic formatting on the model's side.
+       *
+       * Run 202608091336: the manager returned 1717 characters, failed to
+       * parse, was re-asked with the error attached, and returned 1717
+       * characters again -- byte for byte the same reply. The second round
+       * trip cost ~47 seconds and produced the identical failure, then ended
+       * the run.
+       *
+       * Comparing the reply to the previous one turns a guaranteed-useless
+       * round trip into an immediate, accurately-named failure. `repeated` is
+       * reported so the log distinguishes "the model could not fix it" from
+       * "the model did not even try differently".
+       */
+      if (previousText !== null && text === previousText) {
+        this.emit('response-repeated', {
+          what, iteration, chars: text.length,
+          problems: lastValidation?.problems ?? [],
+        });
+        throw new AdapterError('malformed',
+          `${this.role} returned a byte-identical ${what} after being told what was wrong `
+          + '— re-asking cannot fix this',
+          {
+            problems: lastValidation?.problems ?? [],
+            warnings: lastValidation?.warnings ?? [],
+            repeated: true,
+            chars: text.length,
+          });
+      }
+      previousText = text;
 
       const validation = validate(text);
       lastValidation = validation;

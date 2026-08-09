@@ -103,12 +103,35 @@ const TEST_PATTERNS = [
   },
   {
     name: 'mocha',
-    // 1276 passing / 3 failing / 2 pending
-    re: /(\d[\d,_]*)\s+passing/i,
+    /*
+     * ANCHORED TO THE START OF A LINE. THIS PATTERN FABRICATED A `measured`
+     * SCORE OUT OF AN ENGLISH SENTENCE.
+     *
+     * It used to be a bare /(\d+)\s+passing/i, which matches prose. In the
+     * evaluation of 2026-08-09 it fired on:
+     *
+     *   "Journal and its render() method exist and carry 7 passing tests,
+     *    but grep finds no production import."
+     *
+     * and reported "7 passed, 0 failed — read by mocha from terminal". The
+     * reviewer then scored `testing` as MEASURED on the strength of it. A
+     * false `measured` is the exact failure this project exists to prevent:
+     * asserted scores are excluded from the completion criteria so that
+     * uncertainty stays visible, and manufacturing one defeats that.
+     *
+     * Real mocha prints the count at the start of a line, indented by its
+     * reporter and followed by nothing but whitespace or a duration:
+     *
+     *     1276 passing (41s)
+     *
+     * The line anchor plus the end-of-line guard is what separates that from
+     * a clause in the middle of a sentence.
+     */
+    re: /^[ \t]*(\d[\d,_]*)\s+passing\b[ \t]*(?:\([^)]*\))?[ \t]*$/im,
     take: (m, text) => ({
       passed: int(m[1]),
-      failed: int((/(\d[\d,_]*)\s+failing/i.exec(text) || [])[1]),
-      skipped: int((/(\d[\d,_]*)\s+pending/i.exec(text) || [])[1]),
+      failed: int((/^[ \t]*(\d[\d,_]*)\s+failing\b/im.exec(text) || [])[1]),
+      skipped: int((/^[ \t]*(\d[\d,_]*)\s+pending\b/im.exec(text) || [])[1]),
     }),
   },
   {
